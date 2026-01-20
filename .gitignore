@@ -20,10 +20,10 @@ build/
 
 # Output files
 *.csv
-*.json
 *.xlsx
 output/
 logs/
+data/
 
 # IDE
 .vscode/

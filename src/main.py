@@ -14,6 +14,7 @@ from .config import load_config, AppConfig
 from .logger import setup_logger, get_logger
 from .cw_client import ConnectWiseClient
 from .sdp_client import ServiceDeskPlusClient
+from .db import Database
 
 
 def export_to_csv(data: list, filename: str, output_dir: Path) -> Path:
@@ -113,17 +114,22 @@ def main():
     parser.add_argument(
         "--fetch-cw",
         action="store_true",
-        help="Fetch data from ConnectWise"
+        help="Fetch data from ConnectWise and store in local database"
     )
     parser.add_argument(
         "--fetch-sdp",
         action="store_true",
-        help="Fetch data from ServiceDesk Plus"
+        help="Fetch data from ServiceDesk Plus and store in local database"
     )
     parser.add_argument(
         "--export",
         action="store_true",
         help="Export fetched data to CSV files"
+    )
+    parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="Launch the field mapping GUI"
     )
     parser.add_argument(
         "--dry-run",
@@ -136,15 +142,15 @@ def main():
         action="store_true",
         help="Enable debug logging"
     )
-    
+
     args = parser.parse_args()
-    
+
     # Setup logging
     import logging
     log_level = logging.DEBUG if args.debug else logging.INFO
     setup_logger(level=log_level)
     logger = get_logger("cwtosdp.main")
-    
+
     # Load configuration
     try:
         config = load_config(args.env_file)
@@ -152,29 +158,50 @@ def main():
     except ValueError as e:
         logger.error(f"Configuration error: {e}")
         sys.exit(1)
-    
+
     logger.info(f"DRY_RUN mode: {'ENABLED' if config.dry_run else 'DISABLED'}")
-    
+
+    # Initialize database
+    db = Database()
+
     # Fetch data
     cw_data = None
     sdp_data = None
-    
+
     if args.fetch_cw:
         cw_data = fetch_connectwise_data(config)
+        # Store in database
+        db.store_cw_devices(cw_data["devices"])
+        # Analyze field structure
+        db.analyze_fields("cw", cw_data["devices"])
         if args.export:
             export_to_csv(cw_data["devices"], "cw_devices.csv", config.output_dir)
             export_to_csv(cw_data["sites"], "cw_sites.csv", config.output_dir)
             export_to_csv(cw_data["companies"], "cw_companies.csv", config.output_dir)
-    
+
     if args.fetch_sdp:
         sdp_data = fetch_sdp_data(config)
+        # Store in database
+        db.store_sdp_workstations(sdp_data["workstations"])
+        # Analyze field structure
+        db.analyze_fields("sdp", sdp_data["workstations"])
         if args.export:
             export_to_csv(sdp_data["workstations"], "sdp_workstations.csv", config.output_dir)
-    
-    if not args.fetch_cw and not args.fetch_sdp:
-        logger.warning("No action specified. Use --fetch-cw or --fetch-sdp")
+
+    # Launch GUI if requested
+    if args.gui:
+        from .gui import launch_gui
+        launch_gui()
+        return
+
+    if not args.fetch_cw and not args.fetch_sdp and not args.gui:
+        # Show stats and help
+        stats = db.get_stats()
+        logger.info(f"Database stats: {stats}")
+        logger.warning("No action specified. Use --fetch-cw, --fetch-sdp, or --gui")
         parser.print_help()
-    
+
+    db.close()
     logger.info("Done.")
 
 
