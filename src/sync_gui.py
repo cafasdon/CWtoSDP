@@ -350,11 +350,14 @@ class SyncGUI:
         self.category_filter.pack(side=tk.LEFT, padx=5)
         self.category_filter.bind("<<ComboboxSelected>>", self._apply_filter)
 
-        # Selection controls
+        # Selection controls - grouped in a labeled frame for clarity
         ttk.Separator(filter_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, padx=10, fill=tk.Y)
-        ttk.Button(filter_frame, text="Select All", command=self._select_all).pack(side=tk.LEFT, padx=2)
-        ttk.Button(filter_frame, text="Select None", command=self._select_none).pack(side=tk.LEFT, padx=2)
-        ttk.Button(filter_frame, text="Select CREATE Only", command=self._select_create_only).pack(side=tk.LEFT, padx=2)
+        ttk.Label(filter_frame, text="Selection:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(filter_frame, text="✓ All", command=self._select_all, width=6).pack(side=tk.LEFT, padx=2)
+        ttk.Button(filter_frame, text="✗ None", command=self._select_none, width=6).pack(side=tk.LEFT, padx=2)
+        ttk.Button(filter_frame, text="✓ Filtered", command=self._select_filtered).pack(side=tk.LEFT, padx=2)
+        ttk.Button(filter_frame, text="✗ Filtered", command=self._deselect_filtered).pack(side=tk.LEFT, padx=2)
+        ttk.Button(filter_frame, text="✓ CREATE", command=self._select_create_only).pack(side=tk.LEFT, padx=2)
 
         # Selection count label
         self.selection_label = ttk.Label(filter_frame, text="Selected: 0", font=("Segoe UI", 9, "bold"))
@@ -395,18 +398,25 @@ class SyncGUI:
         tree_container.grid_rowconfigure(0, weight=1)
         tree_container.grid_columnconfigure(0, weight=1)
 
-        # Bind selection (double-click to toggle checkbox)
-        self.tree.bind("<Double-1>", self._toggle_selection)
+        # Bind selection events:
+        # - Single click on checkbox column (first column) toggles selection
+        # - Single click anywhere on row also toggles (more intuitive)
+        # - Space key toggles currently highlighted items
+        # - Double-click still works for compatibility
+        self.tree.bind("<Button-1>", self._on_tree_click)
         self.tree.bind("<space>", self._toggle_selected_items)
 
         # Configure tags for colors
-        self.tree.tag_configure("create", background="#fff3cd")  # Yellow
-        self.tree.tag_configure("update", background="#d4edda")  # Green
-        self.tree.tag_configure("selected_create", background="#ffc107")  # Darker yellow for selected
-        self.tree.tag_configure("selected_update", background="#28a745")  # Darker green for selected
+        self.tree.tag_configure("create", background="#fff3cd")  # Yellow - not selected
+        self.tree.tag_configure("update", background="#d4edda")  # Green - not selected
+        self.tree.tag_configure("selected_create", background="#ffc107")  # Darker yellow - selected
+        self.tree.tag_configure("selected_update", background="#28a745")  # Darker green - selected
 
         # Track selected items by their ID (cw_name)
         self.selected_items = set()
+
+        # Track currently visible (filtered) items
+        self.filtered_item_ids = set()
     
     def _create_category_tab(self):
         """Create category breakdown tab as proper GUI."""
@@ -673,19 +683,55 @@ class SyncGUI:
 
         self._populate_tree(filtered)
 
-    def _toggle_selection(self, event):
-        """Toggle selection checkbox on double-click."""
+        # Track which items are currently visible (for filtered selection)
+        self.filtered_item_ids = set(self.tree.get_children())
+
+    # =========================================================================
+    # SELECTION HANDLING
+    # =========================================================================
+
+    def _on_tree_click(self, event):
+        """
+        Handle single-click on treeview row.
+
+        Clicking anywhere on a row toggles its selection checkbox.
+        This is more intuitive than requiring double-click or
+        clicking exactly on the checkbox column.
+
+        Args:
+            event: Mouse click event with x, y coordinates
+        """
+        # Identify which row was clicked
         item_id = self.tree.identify_row(event.y)
-        if item_id:
-            if item_id in self.selected_items:
-                self.selected_items.discard(item_id)
-            else:
-                self.selected_items.add(item_id)
-            self._refresh_item_display(item_id)
-            self._update_selection_label()
+        if not item_id:
+            return  # Clicked on empty area
+
+        # Identify which column was clicked (for future column-specific behavior)
+        column = self.tree.identify_column(event.x)
+
+        # Toggle selection for this item
+        if item_id in self.selected_items:
+            self.selected_items.discard(item_id)
+        else:
+            self.selected_items.add(item_id)
+
+        # Update the display
+        self._refresh_item_display(item_id)
+        self._update_selection_label()
+
+        # Select the row in the treeview for visual feedback
+        self.tree.selection_set(item_id)
 
     def _toggle_selected_items(self, event):
-        """Toggle selection for all currently highlighted items (space key)."""
+        """
+        Toggle selection for all currently highlighted items.
+
+        Triggered by pressing the Space key. Useful for toggling
+        multiple items that have been shift-selected.
+
+        Args:
+            event: Keyboard event
+        """
         selection = self.tree.selection()
         for item_id in selection:
             if item_id in self.selected_items:
@@ -696,7 +742,15 @@ class SyncGUI:
         self._update_selection_label()
 
     def _refresh_item_display(self, item_id):
-        """Refresh a single item's display in the tree."""
+        """
+        Refresh a single item's display in the tree.
+
+        Updates the checkbox character and row color based on
+        whether the item is selected or not.
+
+        Args:
+            item_id: The CW device name (used as tree item ID)
+        """
         item = next((i for i in self.items if i.cw_name == item_id), None)
         if not item:
             return
@@ -722,24 +776,40 @@ class SyncGUI:
         ), tags=(tag,))
 
     def _select_all(self):
-        """Select all visible items."""
-        for item_id in self.tree.get_children():
+        """Select ALL items (not just visible/filtered)."""
+        for item in self.items:
+            self.selected_items.add(item.cw_name)
+        self._apply_filter()  # Refresh display
+        self._update_selection_label()
+
+    def _select_none(self):
+        """Deselect ALL items."""
+        self.selected_items.clear()
+        self._apply_filter()  # Refresh display
+        self._update_selection_label()
+
+    def _select_filtered(self):
+        """Select only the currently visible (filtered) items."""
+        for item_id in self.filtered_item_ids:
             self.selected_items.add(item_id)
             self._refresh_item_display(item_id)
         self._update_selection_label()
 
-    def _select_none(self):
-        """Deselect all items."""
-        self.selected_items.clear()
-        self._apply_filter()  # Refresh display
+    def _deselect_filtered(self):
+        """Deselect only the currently visible (filtered) items."""
+        for item_id in self.filtered_item_ids:
+            self.selected_items.discard(item_id)
+            self._refresh_item_display(item_id)
+        self._update_selection_label()
 
     def _select_create_only(self):
-        """Select only CREATE items."""
+        """Select only CREATE items (items that don't exist in SDP yet)."""
         self.selected_items.clear()
         for item in self.items:
             if item.action == SyncAction.CREATE:
                 self.selected_items.add(item.cw_name)
         self._apply_filter()  # Refresh display
+        self._update_selection_label()
 
     def _update_selection_label(self):
         """Update the selection count label."""
