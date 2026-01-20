@@ -1,9 +1,52 @@
 """
-Adaptive Rate Limiter with Exponential Backoff.
+================================================================================
+Adaptive Rate Limiter with Exponential Backoff
+================================================================================
 
-Automatically adjusts request rate based on API responses:
-- Speeds up when requests succeed
-- Slows down when hitting rate limits (429) or errors
+This module provides intelligent rate limiting for API requests that:
+1. Automatically adjusts request rate based on API responses
+2. Speeds up when requests succeed consistently (up to min_interval)
+3. Slows down exponentially when hitting rate limits (429 errors)
+4. Moderately backs off on other errors to prevent cascading failures
+
+Why Adaptive Rate Limiting?
+---------------------------
+Both ConnectWise and ServiceDesk Plus APIs have rate limits that vary based on:
+- Time of day
+- Account tier
+- Current API load
+
+A fixed rate limit would either:
+- Be too slow (wasting time when API is responsive)
+- Be too fast (hitting rate limits and getting blocked)
+
+The adaptive approach finds the optimal speed automatically by:
+1. Starting at a conservative rate
+2. Speeding up when requests succeed
+3. Backing off immediately when limits are hit
+
+Algorithm:
+----------
+1. WAIT: Before each request, wait for current_interval seconds
+2. ON SUCCESS: After N consecutive successes, multiply interval by speedup_factor
+3. ON 429 (Rate Limit): Multiply interval by backoff_factor (exponential backoff)
+4. ON OTHER ERROR: Multiply interval by 1.5 (moderate backoff)
+
+Usage:
+------
+    limiter = AdaptiveRateLimiter(name="MyAPI", base_interval=1.0)
+
+    # Before making request:
+    limiter.wait()
+    response = requests.get(url)
+
+    # After response:
+    if response.status_code == 200:
+        limiter.on_success()
+    elif response.status_code == 429:
+        limiter.on_rate_limit()
+    else:
+        limiter.on_error()
 """
 
 import time
@@ -11,29 +54,57 @@ from typing import Optional
 
 from .logger import get_logger
 
+# Get logger for this module (child of main cwtosdp logger)
 logger = get_logger("cwtosdp.rate_limiter")
 
 
 class AdaptiveRateLimiter:
     """
-    Adaptive rate limiter with exponential backoff.
-    
-    Starts with a base interval and adjusts based on success/failure:
-    - On success: gradually decrease interval (speed up)
-    - On rate limit (429): exponentially increase interval (slow down)
-    - On other errors: moderately increase interval
+    Adaptive rate limiter with exponential backoff for API requests.
+
+    This class tracks request timing and automatically adjusts the delay
+    between requests based on success/failure patterns. It prevents
+    overwhelming APIs while maximizing throughput when conditions allow.
+
+    Attributes:
+        name: Identifier for logging (e.g., "ConnectWise", "SDP")
+        base_interval: Starting delay between requests (seconds)
+        min_interval: Minimum allowed delay (fastest rate)
+        max_interval: Maximum allowed delay (slowest rate)
+        backoff_factor: Multiplier when rate limited (e.g., 2.0 = double)
+        speedup_factor: Multiplier on success (e.g., 0.9 = 10% faster)
+        success_streak_to_speedup: How many successes before speeding up
+
+    Example:
+        >>> limiter = AdaptiveRateLimiter(name="CW", base_interval=1.0)
+        >>> limiter.wait()  # Waits up to 1 second
+        >>> # ... make API call ...
+        >>> limiter.on_success()  # May speed up next request
     """
-    
+
     def __init__(
         self,
         name: str = "API",
-        base_interval: float = 0.5,      # Starting interval (seconds)
-        min_interval: float = 0.2,        # Fastest allowed (seconds)
-        max_interval: float = 120.0,      # Slowest allowed (seconds)
-        backoff_factor: float = 2.0,      # Multiply interval on rate limit
-        speedup_factor: float = 0.9,      # Multiply interval on success
-        success_streak_to_speedup: int = 5  # Consecutive successes before speeding up
+        base_interval: float = 0.5,       # Starting interval in seconds
+        min_interval: float = 0.2,        # Fastest allowed (5 req/sec)
+        max_interval: float = 120.0,      # Slowest allowed (1 req per 2 min)
+        backoff_factor: float = 2.0,      # 2x slower on rate limit
+        speedup_factor: float = 0.9,      # 10% faster after success streak
+        success_streak_to_speedup: int = 5  # Need 5 successes to speed up
     ):
+        """
+        Initialize the adaptive rate limiter.
+
+        Args:
+            name: Identifier for this limiter (used in log messages)
+            base_interval: Initial delay between requests in seconds
+            min_interval: Minimum delay (won't go faster than this)
+            max_interval: Maximum delay (won't go slower than this)
+            backoff_factor: How much to slow down on rate limit (2.0 = double)
+            speedup_factor: How much to speed up on success (0.9 = 10% faster)
+            success_streak_to_speedup: Consecutive successes needed to speed up
+        """
+        # Configuration
         self.name = name
         self.base_interval = base_interval
         self.min_interval = min_interval
@@ -41,84 +112,183 @@ class AdaptiveRateLimiter:
         self.backoff_factor = backoff_factor
         self.speedup_factor = speedup_factor
         self.success_streak_to_speedup = success_streak_to_speedup
-        
-        self._current_interval = base_interval
-        self._last_request_time: float = 0.0
-        self._consecutive_successes: int = 0
-        self._total_requests: int = 0
-        self._total_rate_limits: int = 0
+
+        # Internal state (prefixed with _ to indicate private)
+        self._current_interval = base_interval      # Current delay between requests
+        self._last_request_time: float = 0.0        # Timestamp of last request
+        self._consecutive_successes: int = 0        # Success streak counter
+        self._total_requests: int = 0               # Total requests made
+        self._total_rate_limits: int = 0            # Total 429s received
     
+    # =========================================================================
+    # PROPERTIES - Read-only access to internal state
+    # =========================================================================
+
     @property
     def current_interval(self) -> float:
+        """
+        Get the current interval between requests.
+
+        Returns:
+            Current delay in seconds between API requests
+        """
         return self._current_interval
-    
+
     @property
     def stats(self) -> dict:
+        """
+        Get statistics about rate limiter performance.
+
+        Useful for monitoring and debugging API interactions.
+
+        Returns:
+            Dictionary with:
+            - total_requests: Total API calls made through this limiter
+            - rate_limits_hit: Number of 429 responses received
+            - current_interval: Current delay between requests
+            - requests_per_minute: Calculated throughput rate
+        """
         return {
             "total_requests": self._total_requests,
             "rate_limits_hit": self._total_rate_limits,
             "current_interval": round(self._current_interval, 2),
             "requests_per_minute": round(60 / self._current_interval, 1) if self._current_interval > 0 else 0
         }
-    
+
+    # =========================================================================
+    # CORE METHODS - Called before/after each API request
+    # =========================================================================
+
     def wait(self):
-        """Wait before making the next request."""
+        """
+        Wait before making the next request.
+
+        This method should be called BEFORE every API request. It:
+        1. Calculates how long since the last request
+        2. Sleeps if needed to maintain the rate limit
+        3. Records the timestamp for the next calculation
+        4. Increments the request counter
+
+        Example:
+            >>> limiter.wait()  # May sleep up to current_interval
+            >>> response = api.get("/endpoint")
+            >>> limiter.on_success()
+        """
+        # Get current time
         now = time.time()
+
+        # Calculate how long since last request
         elapsed = now - self._last_request_time
-        
+
+        # If not enough time has passed, wait
         if elapsed < self._current_interval:
             wait_time = self._current_interval - elapsed
+            # Only log if waiting more than 1 second (avoid log spam)
             if wait_time > 1.0:
                 logger.debug(f"[{self.name}] Rate limiting: waiting {wait_time:.1f}s")
             time.sleep(wait_time)
-        
+
+        # Record this request time for next calculation
         self._last_request_time = time.time()
         self._total_requests += 1
-    
+
     def on_success(self):
-        """Call after a successful request."""
+        """
+        Call this method AFTER a successful API request (200 OK).
+
+        Tracks consecutive successes and speeds up the request rate
+        after a streak of successful calls. This allows the limiter
+        to find the optimal speed automatically.
+
+        Example:
+            >>> if response.status_code == 200:
+            ...     limiter.on_success()
+        """
+        # Increment success streak
         self._consecutive_successes += 1
-        
-        # Speed up after consistent success streak
+
+        # Check if we've had enough successes to speed up
         if self._consecutive_successes >= self.success_streak_to_speedup:
+            # Calculate new faster interval
             new_interval = self._current_interval * self.speedup_factor
+
+            # Only apply if above minimum (don't go faster than allowed)
             if new_interval >= self.min_interval:
                 self._current_interval = new_interval
                 logger.debug(f"[{self.name}] Speeding up: interval now {self._current_interval:.2f}s")
+
+            # Reset streak counter
             self._consecutive_successes = 0
-    
+
     def on_rate_limit(self, retry_after: Optional[int] = None):
-        """Call when hitting a rate limit (429)."""
+        """
+        Call this method when receiving a 429 Too Many Requests response.
+
+        Implements exponential backoff: each rate limit doubles the interval.
+        If the server provides a Retry-After header, uses that value instead.
+
+        Args:
+            retry_after: Optional server-provided wait time in seconds
+                        (from Retry-After HTTP header)
+
+        Example:
+            >>> if response.status_code == 429:
+            ...     retry = response.headers.get("Retry-After")
+            ...     limiter.on_rate_limit(int(retry) if retry else None)
+        """
+        # Reset success streak (we just failed)
         self._consecutive_successes = 0
         self._total_rate_limits += 1
-        
+
         if retry_after:
-            # Use server-provided wait time
+            # Server told us exactly how long to wait - use that
             wait_time = retry_after
             self._current_interval = min(retry_after, self.max_interval)
         else:
-            # Exponential backoff
+            # No server guidance - use exponential backoff
+            # Double the interval (or use backoff_factor)
             self._current_interval = min(
                 self._current_interval * self.backoff_factor,
-                self.max_interval
+                self.max_interval  # Don't exceed maximum
             )
             wait_time = self._current_interval
-        
+
+        # Log warning and wait
         logger.warning(f"[{self.name}] Rate limit hit! Backing off to {self._current_interval:.1f}s interval. Waiting {wait_time:.0f}s...")
         time.sleep(wait_time)
-    
+
     def on_error(self):
-        """Call on other errors (not rate limit)."""
+        """
+        Call this method on non-rate-limit errors (5xx, network errors, etc).
+
+        Applies a moderate backoff (1.5x) since errors might indicate
+        server stress or temporary issues. Less aggressive than rate
+        limit backoff since we want to retry reasonably soon.
+
+        Example:
+            >>> if response.status_code >= 500:
+            ...     limiter.on_error()
+        """
+        # Reset success streak
         self._consecutive_successes = 0
-        # Moderate backoff on errors
+
+        # Moderate backoff - 1.5x slower, not as aggressive as rate limit
         self._current_interval = min(
-            self._current_interval * 1.5,
+            self._current_interval * 1.5,  # 50% slower
             self.max_interval
         )
         logger.debug(f"[{self.name}] Error, slowing down: interval now {self._current_interval:.2f}s")
-    
+
     def reset(self):
-        """Reset to base interval."""
+        """
+        Reset the rate limiter to its initial state.
+
+        Useful when starting a new batch of requests or after a long
+        pause where the API may have recovered.
+
+        Example:
+            >>> limiter.reset()  # Back to base_interval
+        """
         self._current_interval = self.base_interval
         self._consecutive_successes = 0
         logger.info(f"[{self.name}] Rate limiter reset to {self.base_interval}s interval")
