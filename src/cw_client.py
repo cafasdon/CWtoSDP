@@ -11,6 +11,7 @@ import requests
 
 from .config import ConnectWiseConfig
 from .logger import get_logger
+from .rate_limiter import AdaptiveRateLimiter
 
 logger = get_logger("cwtosdp.cw_client")
 
@@ -26,9 +27,12 @@ class ConnectWiseClient:
 
     Handles OAuth2 authentication and provides methods for
     retrieving devices, sites, and companies.
+
+    Rate limiting: Uses adaptive rate limiting with exponential backoff.
+    Automatically adjusts speed based on API responses.
     """
 
-    def __init__(self, config: ConnectWiseConfig, max_retries: int = 3, retry_delay: float = 1.0):
+    def __init__(self, config: ConnectWiseConfig, max_retries: int = 5, retry_delay: float = 1.0):
         """
         Initialize ConnectWise client.
 
@@ -41,6 +45,17 @@ class ConnectWiseClient:
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self._access_token: Optional[str] = None
+
+        # Adaptive rate limiter - starts conservative, adjusts based on responses
+        self.rate_limiter = AdaptiveRateLimiter(
+            name="ConnectWise",
+            base_interval=1.0,     # Start at 1 request per second
+            min_interval=0.3,      # Can speed up to ~3 req/sec if going well
+            max_interval=120.0,    # Max 2 min between requests if heavily throttled
+            backoff_factor=2.0,    # Double interval on rate limit
+            speedup_factor=0.85,   # Speed up by 15% after success streak
+            success_streak_to_speedup=3
+        )
 
     def _get_headers(self) -> Dict[str, str]:
         """Get headers for authenticated API requests."""
@@ -91,7 +106,7 @@ class ConnectWiseClient:
 
     def _make_request(self, method: str, endpoint: str, **kwargs) -> Any:
         """
-        Make an authenticated API request with retry logic.
+        Make an authenticated API request with retry logic and adaptive rate limiting.
 
         Args:
             method: HTTP method (GET, POST, etc.).
@@ -108,6 +123,9 @@ class ConnectWiseClient:
 
         for attempt in range(1, self.max_retries + 1):
             try:
+                # Apply adaptive rate limiting
+                self.rate_limiter.wait()
+
                 resp = requests.request(
                     method,
                     url,
@@ -117,6 +135,7 @@ class ConnectWiseClient:
                 )
 
                 if resp.status_code == 200:
+                    self.rate_limiter.on_success()
                     return resp.json()
                 elif resp.status_code == 401:
                     # Token expired, re-authenticate
@@ -124,14 +143,21 @@ class ConnectWiseClient:
                     self._access_token = None
                     self.authenticate()
                     continue
+                elif resp.status_code == 429:
+                    # Rate limited - use adaptive backoff
+                    retry_after = resp.headers.get("Retry-After")
+                    self.rate_limiter.on_rate_limit(int(retry_after) if retry_after else None)
+                    continue
                 else:
+                    self.rate_limiter.on_error()
                     raise ConnectWiseClientError(
                         f"Request failed: {resp.status_code} - {resp.text}"
                     )
             except requests.RequestException as e:
+                self.rate_limiter.on_error()
                 logger.warning(f"Request attempt {attempt} failed: {e}")
                 if attempt < self.max_retries:
-                    time.sleep(self.retry_delay * attempt)  # Exponential backoff
+                    time.sleep(self.retry_delay * attempt)
                 else:
                     raise ConnectWiseClientError(f"Request failed after {self.max_retries} attempts: {e}")
 

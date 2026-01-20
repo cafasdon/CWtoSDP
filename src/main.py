@@ -15,6 +15,7 @@ from .logger import setup_logger, get_logger
 from .cw_client import ConnectWiseClient
 from .sdp_client import ServiceDeskPlusClient
 from .db import Database
+from .db_compare import CompareDatabase
 
 
 def export_to_csv(data: list, filename: str, output_dir: Path) -> Path:
@@ -132,6 +133,11 @@ def main():
         help="Launch the field mapping GUI"
     )
     parser.add_argument(
+        "--compare",
+        action="store_true",
+        help="Fetch DETAILED data from both systems and store in comparison database"
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         default=True,
@@ -188,17 +194,101 @@ def main():
         if args.export:
             export_to_csv(sdp_data["workstations"], "sdp_workstations.csv", config.output_dir)
 
+    # Comparison mode - fetch detailed data for 1:1 field mapping
+    if args.compare:
+        logger.info("=== COMPARISON MODE: Resumable fetch with adaptive rate limiting ===")
+        compare_db = CompareDatabase()
+
+        # Show current fetch status
+        fetch_stats = compare_db.get_fetch_stats()
+        logger.info(f"Previously fetched: CW={fetch_stats.get('cw', 0)}, SDP={fetch_stats.get('sdp', 0)}")
+
+        # Get already fetched IDs
+        cw_fetched_ids = compare_db.get_fetched_ids("cw")
+        sdp_fetched_ids = compare_db.get_fetched_ids("sdp")
+
+        # Fetch CW detailed device data
+        logger.info("Fetching ConnectWise device list...")
+        cw_client = ConnectWiseClient(config.connectwise)
+        devices = cw_client.get_devices()
+
+        # Filter out already-fetched devices
+        devices_to_fetch = [d for d in devices if d.get("endpointId") not in cw_fetched_ids]
+        logger.info(f"Found {len(devices)} total devices, {len(devices_to_fetch)} new to fetch")
+
+        cw_stored = 0
+        for i, device in enumerate(devices_to_fetch):
+            endpoint_id = device.get("endpointId")
+            if endpoint_id:
+                try:
+                    details = cw_client.get_endpoint_details(endpoint_id)
+                    if compare_db.store_cw_device_single(details, endpoint_id):
+                        cw_stored += 1
+
+                    # Progress update
+                    if (i + 1) % 10 == 0:
+                        stats = cw_client.rate_limiter.stats
+                        logger.info(f"  CW Progress: {i + 1}/{len(devices_to_fetch)} "
+                                   f"(interval: {stats['current_interval']:.1f}s, "
+                                   f"rate limits hit: {stats['rate_limits_hit']})")
+                except Exception as e:
+                    logger.warning(f"Failed to get details for {endpoint_id}: {e}")
+                    # Continue with next device
+
+        logger.info(f"Stored {cw_stored} new ConnectWise devices")
+
+        # Fetch SDP workstation data (these come in bulk, store individually for tracking)
+        logger.info("Fetching ServiceDesk Plus workstation data...")
+        sdp_client = ServiceDeskPlusClient(config.servicedesk)
+        workstations = sdp_client.get_all_cmdb_workstations()
+
+        # Filter and store individually
+        sdp_stored = 0
+        for ws in workstations:
+            ws_id = str(ws.get("id", ""))
+            if ws_id and ws_id not in sdp_fetched_ids:
+                if compare_db.store_sdp_workstation_single(ws, ws_id):
+                    sdp_stored += 1
+
+        logger.info(f"Stored {sdp_stored} new SDP workstations")
+
+        # Show final stats and column comparison
+        final_stats = compare_db.get_fetch_stats()
+        logger.info("=" * 60)
+        logger.info("FETCH COMPLETE:")
+        logger.info(f"  ConnectWise devices: {final_stats.get('cw', 0)}")
+        logger.info(f"  ServiceDesk Plus workstations: {final_stats.get('sdp', 0)}")
+
+        try:
+            comparison = compare_db.get_column_comparison()
+            logger.info(f"FIELD COMPARISON:")
+            logger.info(f"  ConnectWise columns: {comparison['cw_count']}")
+            logger.info(f"  ServiceDesk Plus columns: {comparison['sdp_count']}")
+            logger.info(f"  Common column names: {len(comparison['common'])}")
+            if comparison['common']:
+                logger.info(f"  Common: {comparison['common'][:10]}...")
+        except Exception as e:
+            logger.debug(f"Column comparison not available yet: {e}")
+
+        logger.info(f"")
+        logger.info(f"Database: {compare_db.db_path}")
+        logger.info("Run again to resume if interrupted. Use --gui to explore data.")
+        compare_db.close()
+        db.close()
+        logger.info("Done.")
+        return
+
     # Launch GUI if requested
     if args.gui:
         from .gui import launch_gui
         launch_gui()
         return
 
-    if not args.fetch_cw and not args.fetch_sdp and not args.gui:
+    if not args.fetch_cw and not args.fetch_sdp and not args.gui and not args.compare:
         # Show stats and help
         stats = db.get_stats()
         logger.info(f"Database stats: {stats}")
-        logger.warning("No action specified. Use --fetch-cw, --fetch-sdp, or --gui")
+        logger.warning("No action specified. Use --fetch-cw, --fetch-sdp, --compare, or --gui")
         parser.print_help()
 
     db.close()

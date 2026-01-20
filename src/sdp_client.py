@@ -205,7 +205,10 @@ class ServiceDeskPlusClient:
             API response with workstations and list_info.
         """
         logger.info(f"Fetching CMDB workstations (start: {start_index}, count: {row_count})...")
-        endpoint = f"/cmdb/ci_workstation?list_info.row_count={row_count}&list_info.start_index={start_index}"
+        # Note: CMDB API uses input_data parameter for list_info
+        import json
+        list_info = {"list_info": {"row_count": row_count, "start_index": start_index}}
+        endpoint = f"/cmdb/ci_workstation?input_data={json.dumps(list_info)}"
         data = self._make_request("GET", endpoint)
         workstations = data.get("ci_workstation", [])
         logger.info(f"Retrieved {len(workstations)} workstations")
