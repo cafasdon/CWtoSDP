@@ -133,3 +133,27 @@ def load_config(env_file: Optional[str] = None) -> AppConfig:
         retry_delay_seconds=float(os.getenv("RETRY_DELAY_SECONDS", "1.0")),
     )
 
+
+def load_sdp_config() -> ServiceDeskPlusConfig:
+    """Load just the SDP configuration."""
+    load_dotenv()
+
+    sdp_client_id = os.getenv("ZOHO_CLIENT_ID")
+    sdp_client_secret = os.getenv("ZOHO_CLIENT_SECRET")
+    sdp_refresh_token = os.getenv("ZOHO_REFRESH_TOKEN")
+
+    if not all([sdp_client_id, sdp_client_secret, sdp_refresh_token]):
+        raise ValueError(
+            "Missing ServiceDesk Plus credentials. "
+            "Set ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, and ZOHO_REFRESH_TOKEN."
+        )
+
+    return ServiceDeskPlusConfig(
+        client_id=sdp_client_id,
+        client_secret=sdp_client_secret,
+        refresh_token=sdp_refresh_token,
+        accounts_url=os.getenv("ZOHO_ACCOUNTS_URL", "https://accounts.zoho.eu"),
+        api_base_url=os.getenv("SDP_API_BASE_URL", "https://sdpondemand.manageengine.eu/api/v3"),
+        scopes=os.getenv("SCOPES", "SDPOnDemand.assets.ALL,SDPOnDemand.cmdb.ALL,SDPOnDemand.requests.READ"),
+    )
+

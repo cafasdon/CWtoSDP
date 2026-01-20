@@ -279,3 +279,59 @@ class ServiceDeskPlusClient:
         logger.info(f"Total workstations retrieved: {len(all_workstations)}")
         return all_workstations
 
+    def create_ci(self, ci_type: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Create a new CI (Configuration Item) in CMDB.
+
+        Args:
+            ci_type: The CI type (e.g., 'ci_windows_workstation', 'ci_virtual_machine')
+            data: Dictionary of field values to set
+
+        Returns:
+            Created CI data or None if dry_run or failed.
+        """
+        if self.dry_run:
+            logger.info(f"[DRY RUN] Would create {ci_type}: {data.get('name', 'unknown')}")
+            return {"dry_run": True, "would_create": data}
+
+        import json
+
+        # Build the request payload
+        # SDP expects: {"ci_type": {"name": "...", "ci_attributes": {...}}}
+        ci_data = {ci_type: {}}
+
+        # Map fields to proper structure
+        for key, value in data.items():
+            if value is None or value == "":
+                continue
+            if key == "name":
+                ci_data[ci_type]["name"] = value
+            elif key.startswith("ci_attributes_"):
+                # Nested under ci_attributes
+                if "ci_attributes" not in ci_data[ci_type]:
+                    ci_data[ci_type]["ci_attributes"] = {}
+                # Strip the prefix for the actual field name
+                field_name = key  # Keep full name as SDP expects it
+                ci_data[ci_type]["ci_attributes"][field_name] = value
+
+        endpoint = f"/cmdb/{ci_type}"
+        input_data = {"input_data": json.dumps(ci_data)}
+
+        try:
+            result = self._make_request("POST", endpoint, data=input_data)
+            logger.info(f"Created {ci_type}: {data.get('name', 'unknown')}")
+            return result
+        except ServiceDeskPlusClientError as e:
+            logger.error(f"Failed to create {ci_type}: {e}")
+            return None
+
+
+# Convenience wrapper for sync operations
+class SDPClient(ServiceDeskPlusClient):
+    """Simplified SDP client for sync operations."""
+
+    def __init__(self, dry_run: bool = False):
+        from .config import load_sdp_config
+        config = load_sdp_config()
+        super().__init__(config, dry_run=dry_run)
+
