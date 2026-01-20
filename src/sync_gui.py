@@ -317,6 +317,9 @@ class SyncGUI:
         # Open settings dialog for credential configuration
         ttk.Button(refresh_row, text="⚙️ Settings",
                    command=self._open_settings).pack(side=tk.LEFT, padx=5)
+        # Open help/automation guide
+        ttk.Button(refresh_row, text="❓ Help",
+                   command=self._open_help).pack(side=tk.LEFT, padx=5)
 
         # Stats labels will be added after data loads
         self.stats_frame = ttk.Frame(summary_frame)
@@ -1306,6 +1309,10 @@ ORPHAN CHECK:
         """Open the settings/credentials configuration dialog."""
         SettingsDialog(self.root)
 
+    def _open_help(self):
+        """Open the help dialog with automation instructions."""
+        HelpDialog(self.root)
+
     def run(self):
         """Run the application."""
         self.root.mainloop()
@@ -1568,6 +1575,279 @@ SCOPES=SDPOnDemand.assets.ALL,SDPOnDemand.cmdb.ALL,SDPOnDemand.requests.READ
             results.append(f"❌ ServiceDesk Plus: {str(e)[:50]}")
 
         messagebox.showinfo("Connection Test Results", "\n".join(results))
+
+
+# =============================================================================
+# HELP DIALOG CLASS
+# =============================================================================
+
+class HelpDialog:
+    """
+    Help dialog with automation setup instructions.
+
+    Provides a tabbed interface with:
+    - Getting Started guide
+    - Automation setup for Windows, Mac, Linux
+    - Troubleshooting tips
+    """
+
+    def __init__(self, parent):
+        """
+        Create the help dialog.
+
+        Args:
+            parent: Parent window
+        """
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("Help - CWtoSDP Sync Manager")
+        self.dialog.geometry("700x600")
+        self.dialog.resizable(True, True)
+        self.dialog.transient(parent)
+
+        # Center on parent
+        self.dialog.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() - 700) // 2
+        y = parent.winfo_y() + (parent.winfo_height() - 600) // 2
+        self.dialog.geometry(f"+{x}+{y}")
+
+        self._create_content()
+
+    def _create_content(self):
+        """Create the help content with tabs."""
+        notebook = ttk.Notebook(self.dialog)
+        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # Tab 1: Getting Started
+        self._create_getting_started_tab(notebook)
+
+        # Tab 2: Automation Setup
+        self._create_automation_tab(notebook)
+
+        # Tab 3: Troubleshooting
+        self._create_troubleshooting_tab(notebook)
+
+        # Close button
+        ttk.Button(self.dialog, text="Close", command=self.dialog.destroy).pack(pady=10)
+
+    def _create_getting_started_tab(self, notebook):
+        """Create the Getting Started tab."""
+        frame = ttk.Frame(notebook, padding="10")
+        notebook.add(frame, text="Getting Started")
+
+        text = tk.Text(frame, wrap=tk.WORD, font=("Consolas", 10))
+        scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=text.yview)
+        text.configure(yscrollcommand=scrollbar.set)
+
+        content = """CWtoSDP SYNC MANAGER - GETTING STARTED
+======================================
+
+This tool synchronizes devices from ConnectWise RMM to ServiceDesk Plus CMDB.
+
+QUICK START:
+1. Click ⚙️ Settings to configure your API credentials
+2. Click 🔄 Refresh CW Data to fetch devices from ConnectWise
+3. Click 🔄 Refresh SDP Data to fetch existing CMDB entries
+4. Review the Sync Preview tab to see what will be synced
+5. Use checkboxes to select which items to sync
+6. Click 🔍 Preview Sync to see what would happen (dry run)
+7. Check ☑️ Enable Real Sync to enable live mode
+8. Click ⚠️ Execute Real Sync to create records in SDP
+
+TABS:
+• Sync Preview - All devices with their sync status
+• By Category - Devices grouped by type (Laptop, Server, etc.)
+• Field Mapping - How CW fields map to SDP fields
+• Results - Shows details after sync execution
+
+SAFETY FEATURES:
+• Dry run mode is ON by default (no changes made)
+• Confirmation dialog before real sync
+• Revert button to undo last sync
+• All actions are logged to logs/ folder
+
+DEVICE CLASSIFICATION:
+• Laptops: ThinkPad, ProBook, and similar models
+• Desktops: Standard workstations
+• Virtual Servers: VMware/Hyper-V VMs (detected by serial)
+• Physical Servers: Real hardware servers
+• Network Devices: Switches, routers, firewalls
+"""
+        text.insert("1.0", content)
+        text.config(state=tk.DISABLED)
+
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+    def _create_automation_tab(self, notebook):
+        """Create the Automation Setup tab."""
+        frame = ttk.Frame(notebook, padding="10")
+        notebook.add(frame, text="Automation Setup")
+
+        text = tk.Text(frame, wrap=tk.WORD, font=("Consolas", 10))
+        scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=text.yview)
+        text.configure(yscrollcommand=scrollbar.set)
+
+        content = """AUTOMATED SYNC SETUP
+====================
+
+Use automation scripts to run syncs without user interaction.
+
+AUTOMATION SCRIPTS:
+• run_sync.bat     - Windows
+• run_sync.command - macOS
+• run_sync.sh      - Linux
+
+COMMAND-LINE OPTIONS:
+  python run_sync.py --dry-run      # Preview only (safe)
+  python run_sync.py                # Real sync with prompt
+  python run_sync.py --yes          # Real sync, no prompts
+  python run_sync.py --create-only  # Only create new items
+  python run_sync.py --preview-only # Just show plan
+
+═══════════════════════════════════════════════════════════
+WINDOWS TASK SCHEDULER
+═══════════════════════════════════════════════════════════
+
+1. Press Win+R, type: taskschd.msc
+
+2. Click "Create Basic Task..."
+   • Name: CWtoSDP Sync
+   • Trigger: Daily at 2:00 AM
+   • Action: Start a program
+
+3. Set program:
+   • Program: C:\\Path\\To\\CWtoSDP\\run_sync.bat
+   • Start in: C:\\Path\\To\\CWtoSDP
+
+4. Configure settings:
+   • Run whether user is logged on or not
+   • Run with highest privileges
+
+═══════════════════════════════════════════════════════════
+MACOS LAUNCHD
+═══════════════════════════════════════════════════════════
+
+1. Create file: ~/Library/LaunchAgents/com.cwtosdp.sync.plist
+
+2. Add content:
+   <plist version="1.0">
+   <dict>
+     <key>Label</key>
+     <string>com.cwtosdp.sync</string>
+     <key>ProgramArguments</key>
+     <array>
+       <string>/path/to/run_sync.command</string>
+     </array>
+     <key>StartCalendarInterval</key>
+     <dict>
+       <key>Hour</key><integer>2</integer>
+       <key>Minute</key><integer>0</integer>
+     </dict>
+   </dict>
+   </plist>
+
+3. Load with:
+   launchctl load ~/Library/LaunchAgents/com.cwtosdp.sync.plist
+
+═══════════════════════════════════════════════════════════
+LINUX CRON
+═══════════════════════════════════════════════════════════
+
+1. Edit crontab:
+   crontab -e
+
+2. Add line (runs daily at 2:00 AM):
+   0 2 * * * cd /path/to/CWtoSDP && ./run_sync.sh >> logs/cron.log 2>&1
+
+═══════════════════════════════════════════════════════════
+BEST PRACTICES
+═══════════════════════════════════════════════════════════
+
+• Run at off-peak hours (2-4 AM)
+• Use --create-only initially for safety
+• Check logs regularly for errors
+• Test with --dry-run before scheduling
+• Keep credentials.env secure (600 permissions)
+"""
+        text.insert("1.0", content)
+        text.config(state=tk.DISABLED)
+
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+    def _create_troubleshooting_tab(self, notebook):
+        """Create the Troubleshooting tab."""
+        frame = ttk.Frame(notebook, padding="10")
+        notebook.add(frame, text="Troubleshooting")
+
+        text = tk.Text(frame, wrap=tk.WORD, font=("Consolas", 10))
+        scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=text.yview)
+        text.configure(yscrollcommand=scrollbar.set)
+
+        content = """TROUBLESHOOTING GUIDE
+=====================
+
+COMMON ISSUES:
+─────────────────────────────────────────────────────────
+
+❌ "Credentials not found"
+   → Copy credentials.env.template to credentials.env
+   → Fill in your API credentials
+   → Or use ⚙️ Settings to configure
+
+❌ "401 Unauthorized" error
+   → Check CLIENT_ID and CLIENT_SECRET are correct
+   → For SDP, refresh token may have expired
+   → Generate new Zoho OAuth tokens
+
+❌ "Rate limit exceeded"
+   → Wait a few minutes before retrying
+   → Reduce sync frequency (hourly → daily)
+   → The tool has automatic backoff built in
+
+❌ "No devices found"
+   → Click 🔄 Refresh CW Data to fetch devices
+   → Check ConnectWise API credentials
+   → Verify API has device permissions
+
+❌ Script not running (automation)
+   → Check file has execute permission (chmod +x)
+   → Verify path in scheduler is correct
+   → Check Task Scheduler history or cron logs
+
+❌ "tkinter not found"
+   → Windows: Usually included with Python
+   → macOS: brew install python-tk
+   → Linux: sudo apt install python3-tk
+
+─────────────────────────────────────────────────────────
+LOG FILES
+─────────────────────────────────────────────────────────
+
+Application logs: logs/cwtosdp_YYYYMMDD.log
+Sync results:     logs/sync_results_*.json
+
+Log levels:
+• INFO  - Normal operations
+• WARN  - Non-critical issues
+• ERROR - Failures requiring attention
+
+─────────────────────────────────────────────────────────
+GETTING HELP
+─────────────────────────────────────────────────────────
+
+1. Check the README.md for documentation
+2. Review logs/ folder for error details
+3. Test API connections with ⚙️ Settings → Test Connections
+4. For API issues, check:
+   • ConnectWise: Partner portal
+   • ServiceDesk Plus: Zoho API console
+"""
+        text.insert("1.0", content)
+        text.config(state=tk.DISABLED)
+
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
 
 def launch_sync_gui():
