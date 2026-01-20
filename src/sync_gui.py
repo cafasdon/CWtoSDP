@@ -177,8 +177,8 @@ class SyncGUI:
             self.sync_btn.config(text="🔍 Preview Sync (Dry Run)")
 
     def _create_preview_tab(self):
-        """Create the sync preview tab with ALL fields visible."""
-        # Filter frame
+        """Create the sync preview tab with ALL fields visible and selection support."""
+        # Filter and selection controls frame
         filter_frame = ttk.Frame(self.preview_frame)
         filter_frame.pack(fill=tk.X, pady=(0, 5))
 
@@ -194,6 +194,16 @@ class SyncGUI:
         self.category_filter.pack(side=tk.LEFT, padx=5)
         self.category_filter.bind("<<ComboboxSelected>>", self._apply_filter)
 
+        # Selection controls
+        ttk.Separator(filter_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, padx=10, fill=tk.Y)
+        ttk.Button(filter_frame, text="Select All", command=self._select_all).pack(side=tk.LEFT, padx=2)
+        ttk.Button(filter_frame, text="Select None", command=self._select_none).pack(side=tk.LEFT, padx=2)
+        ttk.Button(filter_frame, text="Select CREATE Only", command=self._select_create_only).pack(side=tk.LEFT, padx=2)
+
+        # Selection count label
+        self.selection_label = ttk.Label(filter_frame, text="Selected: 0", font=("Segoe UI", 9, "bold"))
+        self.selection_label.pack(side=tk.LEFT, padx=10)
+
         # Info label
         ttk.Label(filter_frame, text="(Scroll right to see all SDP fields →)",
                   foreground="gray").pack(side=tk.RIGHT)
@@ -202,12 +212,12 @@ class SyncGUI:
         tree_container = ttk.Frame(self.preview_frame)
         tree_container.pack(fill=tk.BOTH, expand=True)
 
-        # Define ALL columns including SDP fields
-        columns = ("cw_name", "category", "action", "sdp_ci_type", "match_reason",
+        # Define ALL columns including checkbox and SDP fields
+        columns = ("selected", "cw_name", "category", "action", "sdp_ci_type", "match_reason",
                    "name", "serial_number", "os", "manufacturer", "ip_address", "mac_address")
-        headings = ("CW Device", "Category", "Action", "SDP CI Type", "Match Reason",
+        headings = ("✓", "CW Device", "Category", "Action", "SDP CI Type", "Match Reason",
                     "→ SDP Name", "→ Serial #", "→ OS", "→ Manufacturer", "→ IP Address", "→ MAC Address")
-        widths = (200, 110, 70, 160, 200, 200, 150, 200, 150, 120, 180)
+        widths = (30, 200, 110, 70, 160, 200, 200, 150, 200, 150, 120, 180)
 
         # Create treeview with both scrollbars
         self.tree = ttk.Treeview(tree_container, columns=columns, show="headings", height=25)
@@ -229,12 +239,18 @@ class SyncGUI:
         tree_container.grid_rowconfigure(0, weight=1)
         tree_container.grid_columnconfigure(0, weight=1)
 
-        # Bind selection
-        self.tree.bind("<<TreeviewSelect>>", self._on_select)
+        # Bind selection (double-click to toggle checkbox)
+        self.tree.bind("<Double-1>", self._toggle_selection)
+        self.tree.bind("<space>", self._toggle_selected_items)
 
         # Configure tags for colors
         self.tree.tag_configure("create", background="#fff3cd")  # Yellow
         self.tree.tag_configure("update", background="#d4edda")  # Green
+        self.tree.tag_configure("selected_create", background="#ffc107")  # Darker yellow for selected
+        self.tree.tag_configure("selected_update", background="#28a745")  # Darker green for selected
+
+        # Track selected items by their ID (cw_name)
+        self.selected_items = set()
     
     def _create_category_tab(self):
         """Create category breakdown tab as proper GUI."""
@@ -392,14 +408,23 @@ class SyncGUI:
         self.category_filter.set("All")
 
     def _populate_tree(self, items=None):
-        """Populate the tree view with ALL fields."""
+        """Populate the tree view with ALL fields and selection checkbox."""
         self.tree.delete(*self.tree.get_children())
 
         items = items or self.items
         for item in items:
-            tag = item.action.value
+            is_selected = item.cw_name in self.selected_items
+            check_mark = "☑" if is_selected else "☐"
+
+            # Determine tag based on action and selection
+            if is_selected:
+                tag = f"selected_{item.action.value}"
+            else:
+                tag = item.action.value
+
             fields = item.fields_to_sync
-            self.tree.insert("", tk.END, values=(
+            self.tree.insert("", tk.END, iid=item.cw_name, values=(
+                check_mark,
                 item.cw_name,
                 item.cw_category,
                 item.action.value.upper(),
@@ -413,6 +438,8 @@ class SyncGUI:
                 fields.get("ci_attributes_txt_ip_address", ""),
                 fields.get("ci_attributes_txt_mac_address", ""),
             ), tags=(tag,))
+
+        self._update_selection_label()
 
     def _populate_category_tab(self):
         """Populate category breakdown as proper GUI."""
@@ -490,43 +517,115 @@ class SyncGUI:
 
         self._populate_tree(filtered)
 
-    def _on_select(self, event):
-        """Handle tree selection."""
+    def _toggle_selection(self, event):
+        """Toggle selection checkbox on double-click."""
+        item_id = self.tree.identify_row(event.y)
+        if item_id:
+            if item_id in self.selected_items:
+                self.selected_items.discard(item_id)
+            else:
+                self.selected_items.add(item_id)
+            self._refresh_item_display(item_id)
+            self._update_selection_label()
+
+    def _toggle_selected_items(self, event):
+        """Toggle selection for all currently highlighted items (space key)."""
         selection = self.tree.selection()
-        if not selection:
+        for item_id in selection:
+            if item_id in self.selected_items:
+                self.selected_items.discard(item_id)
+            else:
+                self.selected_items.add(item_id)
+            self._refresh_item_display(item_id)
+        self._update_selection_label()
+
+    def _refresh_item_display(self, item_id):
+        """Refresh a single item's display in the tree."""
+        item = next((i for i in self.items if i.cw_name == item_id), None)
+        if not item:
             return
 
-        # Get selected item details
-        values = self.tree.item(selection[0])["values"]
-        cw_name = values[0]
+        is_selected = item_id in self.selected_items
+        check_mark = "☑" if is_selected else "☐"
+        tag = f"selected_{item.action.value}" if is_selected else item.action.value
 
-        # Find the full item
-        item = next((i for i in self.items if i.cw_name == cw_name), None)
-        if item:
-            # Could show a detail popup here
-            pass
+        fields = item.fields_to_sync
+        self.tree.item(item_id, values=(
+            check_mark,
+            item.cw_name,
+            item.cw_category,
+            item.action.value.upper(),
+            item.sdp_ci_type,
+            item.match_reason or "-",
+            fields.get("name", ""),
+            fields.get("ci_attributes_txt_serial_number", ""),
+            fields.get("ci_attributes_txt_os", ""),
+            fields.get("ci_attributes_txt_manufacturer", ""),
+            fields.get("ci_attributes_txt_ip_address", ""),
+            fields.get("ci_attributes_txt_mac_address", ""),
+        ), tags=(tag,))
+
+    def _select_all(self):
+        """Select all visible items."""
+        for item_id in self.tree.get_children():
+            self.selected_items.add(item_id)
+            self._refresh_item_display(item_id)
+        self._update_selection_label()
+
+    def _select_none(self):
+        """Deselect all items."""
+        self.selected_items.clear()
+        self._apply_filter()  # Refresh display
+
+    def _select_create_only(self):
+        """Select only CREATE items."""
+        self.selected_items.clear()
+        for item in self.items:
+            if item.action == SyncAction.CREATE:
+                self.selected_items.add(item.cw_name)
+        self._apply_filter()  # Refresh display
+
+    def _update_selection_label(self):
+        """Update the selection count label."""
+        count = len(self.selected_items)
+        create_count = len([i for i in self.items if i.cw_name in self.selected_items and i.action == SyncAction.CREATE])
+        self.selection_label.config(text=f"Selected: {count} ({create_count} CREATE)")
 
     def _execute_sync(self):
-        """Execute sync: CREATE only (no overwrites). Dry run by default."""
+        """Execute sync: CREATE only (no overwrites). Dry run by default. Uses selection if any."""
         if self.sync_in_progress:
             messagebox.showwarning("Sync in Progress", "A sync operation is already running.")
             return
 
         is_dry_run = not self.real_sync_var.get()
 
-        # Count items to create
-        create_items = [i for i in self.items if i.action == SyncAction.CREATE]
-        if not create_items:
-            messagebox.showinfo("Nothing to Create", "All CW devices already exist in SDP. Nothing to create.")
+        # Get items to sync - use selection if any, otherwise all CREATE items
+        if self.selected_items:
+            # Only selected CREATE items
+            sync_items = [i for i in self.items
+                         if i.cw_name in self.selected_items and i.action == SyncAction.CREATE]
+            selection_mode = "SELECTED"
+        else:
+            # All CREATE items
+            sync_items = [i for i in self.items if i.action == SyncAction.CREATE]
+            selection_mode = "ALL"
+
+        if not sync_items:
+            if self.selected_items:
+                messagebox.showinfo("Nothing to Sync",
+                    "No CREATE items in your selection.\n\nNote: Only CREATE items can be synced (UPDATE items are skipped).")
+            else:
+                messagebox.showinfo("Nothing to Create", "All CW devices already exist in SDP. Nothing to create.")
             return
 
         # Build confirmation message
         mode_text = "DRY RUN (preview only)" if is_dry_run else "REAL SYNC"
-        msg = f"Mode: {mode_text}\n\n"
-        msg += f"This will CREATE {len(create_items)} new assets in SDP.\n\n"
+        msg = f"Mode: {mode_text}\n"
+        msg += f"Selection: {selection_mode} ({len(sync_items)} items)\n\n"
+        msg += f"This will CREATE {len(sync_items)} new assets in SDP.\n\n"
         msg += "By Category:\n"
-        for cat in sorted(set(i.cw_category for i in create_items)):
-            count = len([i for i in create_items if i.cw_category == cat])
+        for cat in sorted(set(i.cw_category for i in sync_items)):
+            count = len([i for i in sync_items if i.cw_category == cat])
             msg += f"  • {cat}: {count}\n"
         msg += "\nExisting matches will be SKIPPED (no overwrites).\n"
 
@@ -540,14 +639,13 @@ class SyncGUI:
 
         # Start sync in background thread
         self.sync_in_progress = True
-        original_text = self.sync_btn.cget("text")
         self.sync_btn.config(state=tk.DISABLED, text="⏳ Syncing...")
 
         # Create progress window
-        self._create_progress_window(len(create_items), is_dry_run)
+        self._create_progress_window(len(sync_items), is_dry_run)
 
         # Run sync in thread
-        thread = threading.Thread(target=self._run_sync_thread, args=(create_items, is_dry_run))
+        thread = threading.Thread(target=self._run_sync_thread, args=(sync_items, is_dry_run))
         thread.daemon = True
         thread.start()
 
@@ -577,8 +675,11 @@ class SyncGUI:
     def _run_sync_thread(self, items: List[SyncItem], is_dry_run: bool):
         """Run sync in background thread."""
         from .sdp_client import SDPClient
+        from datetime import datetime
 
         created_ids = []  # Track created items for revert
+        sync_results = []  # Track all results for results tab
+        start_time = datetime.now()
 
         try:
             sdp = SDPClient(dry_run=is_dry_run)
@@ -590,6 +691,15 @@ class SyncGUI:
         error_count = 0
 
         for i, item in enumerate(items):
+            result_entry = {
+                "name": item.cw_name,
+                "category": item.cw_category,
+                "ci_type": item.sdp_ci_type,
+                "status": "pending",
+                "message": "",
+                "sdp_id": None
+            }
+
             try:
                 # Create the asset in SDP
                 result = sdp.create_ci(item.sdp_ci_type, item.fields_to_sync)
@@ -597,11 +707,16 @@ class SyncGUI:
                     success_count += 1
                     if is_dry_run:
                         log_msg = f"[DRY] Would create: {item.cw_name} → {item.sdp_ci_type}"
+                        result_entry["status"] = "would_create"
+                        result_entry["message"] = "Would be created (dry run)"
                     else:
                         log_msg = f"✓ Created: {item.cw_name}"
+                        result_entry["status"] = "success"
+                        result_entry["message"] = "Created successfully"
                         # Track for revert
                         sdp_id = result.get(item.sdp_ci_type, {}).get("id")
                         if sdp_id:
+                            result_entry["sdp_id"] = sdp_id
                             created_ids.append({
                                 "sdp_id": sdp_id,
                                 "ci_type": item.sdp_ci_type,
@@ -610,9 +725,16 @@ class SyncGUI:
                 else:
                     error_count += 1
                     log_msg = f"✗ Failed: {item.cw_name}"
+                    result_entry["status"] = "failed"
+                    result_entry["message"] = "API returned no result"
             except Exception as e:
                 error_count += 1
-                log_msg = f"✗ Error: {item.cw_name} - {str(e)[:50]}"
+                error_msg = str(e)[:100]
+                log_msg = f"✗ Error: {item.cw_name} - {error_msg[:50]}"
+                result_entry["status"] = "error"
+                result_entry["message"] = error_msg
+
+            sync_results.append(result_entry)
 
             # Update UI in main thread
             self.root.after(0, lambda i=i, msg=log_msg: self._update_progress(i + 1, len(items), msg))
@@ -621,8 +743,13 @@ class SyncGUI:
         if not is_dry_run and created_ids:
             self._save_sync_log(created_ids)
 
-        # Done
-        self.root.after(0, lambda: self._sync_complete(success_count, error_count, is_dry_run))
+        end_time = datetime.now()
+        duration = (end_time - start_time).total_seconds()
+
+        # Done - pass results for results tab
+        self.root.after(0, lambda: self._sync_complete(
+            success_count, error_count, is_dry_run, sync_results, duration
+        ))
 
     def _save_sync_log(self, created_ids: List[Dict]):
         """Save sync log to database for revert capability."""
@@ -671,8 +798,9 @@ class SyncGUI:
             self.progress_win.destroy()
         messagebox.showerror("Sync Error", msg)
 
-    def _sync_complete(self, success: int, errors: int, is_dry_run: bool):
-        """Handle sync completion."""
+    def _sync_complete(self, success: int, errors: int, is_dry_run: bool,
+                       results: List[Dict] = None, duration: float = 0):
+        """Handle sync completion and create results tab."""
         self.sync_in_progress = False
         self._on_real_sync_toggle()  # Reset button text
 
@@ -686,9 +814,107 @@ class SyncGUI:
         ttk.Button(self.progress_win, text="Close",
                    command=self.progress_win.destroy).pack(pady=10)
 
+        # Create/update results tab
+        if results:
+            self._create_results_tab(results, success, errors, is_dry_run, duration)
+
         # Reload data to reflect changes (only if real sync)
         if not is_dry_run:
             self._load_data()
+
+    def _create_results_tab(self, results: List[Dict], success: int, errors: int,
+                           is_dry_run: bool, duration: float):
+        """Create or update the Sync Results tab."""
+        from datetime import datetime
+
+        # Remove existing results tab if present
+        for tab_id in self.notebook.tabs():
+            if "Results" in self.notebook.tab(tab_id, "text"):
+                self.notebook.forget(tab_id)
+
+        # Create new results frame
+        results_frame = ttk.Frame(self.notebook, padding="5")
+        tab_title = "📋 Dry Run Results" if is_dry_run else "✅ Sync Results"
+        self.notebook.add(results_frame, text=tab_title)
+
+        # Summary section
+        summary_frame = ttk.LabelFrame(results_frame, text="Summary", padding=10)
+        summary_frame.pack(fill=tk.X, pady=(0, 10))
+
+        mode = "DRY RUN" if is_dry_run else "REAL SYNC"
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        summary_text = f"Mode: {mode}  |  Time: {timestamp}  |  Duration: {duration:.1f}s  |  "
+        summary_text += f"Success: {success}  |  Errors: {errors}  |  Total: {len(results)}"
+
+        ttk.Label(summary_frame, text=summary_text, font=("Segoe UI", 10)).pack(anchor=tk.W)
+
+        # Status breakdown
+        status_counts = {}
+        for r in results:
+            status = r["status"]
+            status_counts[status] = status_counts.get(status, 0) + 1
+
+        status_text = "Status breakdown: " + ", ".join(f"{k}: {v}" for k, v in sorted(status_counts.items()))
+        ttk.Label(summary_frame, text=status_text, foreground="gray").pack(anchor=tk.W)
+
+        # Results tree
+        tree_frame = ttk.Frame(results_frame)
+        tree_frame.pack(fill=tk.BOTH, expand=True)
+
+        columns = ("status_icon", "name", "category", "ci_type", "status", "message", "sdp_id")
+        headings = ("", "Device Name", "Category", "CI Type", "Status", "Message", "SDP ID")
+        widths = (30, 200, 120, 160, 100, 300, 100)
+
+        results_tree = ttk.Treeview(tree_frame, columns=columns, show="headings", height=20)
+
+        for i, col in enumerate(columns):
+            results_tree.heading(col, text=headings[i])
+            results_tree.column(col, width=widths[i], minwidth=widths[i])
+
+        # Scrollbars
+        v_scroll = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=results_tree.yview)
+        h_scroll = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL, command=results_tree.xview)
+        results_tree.configure(yscrollcommand=v_scroll.set, xscrollcommand=h_scroll.set)
+
+        results_tree.grid(row=0, column=0, sticky="nsew")
+        v_scroll.grid(row=0, column=1, sticky="ns")
+        h_scroll.grid(row=1, column=0, sticky="ew")
+
+        tree_frame.grid_rowconfigure(0, weight=1)
+        tree_frame.grid_columnconfigure(0, weight=1)
+
+        # Configure tags
+        results_tree.tag_configure("success", background="#d4edda")
+        results_tree.tag_configure("would_create", background="#d1ecf1")
+        results_tree.tag_configure("failed", background="#f8d7da")
+        results_tree.tag_configure("error", background="#f5c6cb")
+
+        # Status icons
+        status_icons = {
+            "success": "✓",
+            "would_create": "○",
+            "failed": "✗",
+            "error": "⚠",
+            "pending": "?"
+        }
+
+        # Populate tree
+        for r in results:
+            icon = status_icons.get(r["status"], "?")
+            tag = r["status"]
+            results_tree.insert("", tk.END, values=(
+                icon,
+                r["name"],
+                r["category"],
+                r["ci_type"],
+                r["status"].replace("_", " ").title(),
+                r["message"],
+                r["sdp_id"] or "-"
+            ), tags=(tag,))
+
+        # Switch to results tab
+        self.notebook.select(results_frame)
 
     def _revert_sync(self):
         """Revert the last sync operation."""
