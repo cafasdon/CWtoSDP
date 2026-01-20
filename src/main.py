@@ -133,6 +133,16 @@ def main():
         help="Launch the field mapping GUI"
     )
     parser.add_argument(
+        "--match",
+        action="store_true",
+        help="Launch the Asset Matcher GUI (find matches between CW and SDP)"
+    )
+    parser.add_argument(
+        "--sync",
+        action="store_true",
+        help="Launch the Sync Manager GUI (preview and execute CW->SDP sync)"
+    )
+    parser.add_argument(
         "--compare",
         action="store_true",
         help="Fetch DETAILED data from both systems and store in comparison database"
@@ -284,7 +294,19 @@ def main():
         launch_gui()
         return
 
-    if not args.fetch_cw and not args.fetch_sdp and not args.gui and not args.compare:
+    # Launch Asset Matcher GUI if requested
+    if args.match:
+        from .asset_matcher import launch_asset_matcher
+        launch_asset_matcher()
+        return
+
+    # Launch Sync Manager GUI if requested
+    if args.sync:
+        from .sync_gui import launch_sync_gui
+        launch_sync_gui()
+        return
+
+    if not args.fetch_cw and not args.fetch_sdp and not args.gui and not args.compare and not args.match and not args.sync:
         # Show stats and help
         stats = db.get_stats()
         logger.info(f"Database stats: {stats}")
