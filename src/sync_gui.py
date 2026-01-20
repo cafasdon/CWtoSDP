@@ -1,11 +1,53 @@
 """
-Sync GUI for CWtoSDP.
+================================================================================
+Sync GUI for CWtoSDP - Main User Interface
+================================================================================
 
-Integrated interface showing:
-1. Sync preview (what will be created/updated) with ALL fields visible
-2. Field mappings as proper table
-3. Category breakdown as proper GUI
-4. Sync execution (create only, no overwrites)
+This module provides the main graphical user interface for the CWtoSDP
+integration tool. It allows users to:
+
+1. Preview sync operations (what will be created/updated)
+2. View field mappings between ConnectWise and ServiceDesk Plus
+3. See category breakdown of devices
+4. Execute sync operations with safety controls
+5. View sync results and revert changes if needed
+
+GUI Layout:
+-----------
++------------------------------------------------------------------+
+|  Summary Cards (Total, Creates, Updates)  |  Sync Controls       |
++------------------------------------------------------------------+
+|  Notebook Tabs:                                                   |
+|  +------------------------------------------------------------+  |
+|  | Sync Preview | By Category | Field Mapping | Results       |  |
+|  +------------------------------------------------------------+  |
+|  |                                                             |  |
+|  |  Main content area with treeviews and data                 |  |
+|  |                                                             |  |
+|  +------------------------------------------------------------+  |
++------------------------------------------------------------------+
+
+Key Features:
+-------------
+- Checkbox selection for individual items to sync
+- Dry run mode (default) prevents accidental changes
+- Real-time progress updates during sync
+- Results tab shows what was created/updated
+- Revert functionality to undo changes
+- Settings dialog for credential configuration
+
+Threading:
+----------
+Sync operations run in background threads to keep the GUI responsive.
+Progress updates are sent to the main thread via root.after().
+
+Usage:
+------
+    from src.sync_gui import launch_sync_gui
+    launch_sync_gui()
+
+Or via command line:
+    python -m src.main --sync
 """
 
 import json
@@ -18,125 +60,229 @@ from typing import Dict, List, Optional
 from .logger import get_logger
 from .sync_engine import SyncEngine, SyncAction, SyncItem
 
+# Create logger for this module
 logger = get_logger("cwtosdp.sync_gui")
 
 
+# =============================================================================
+# HELPER WIDGETS
+# =============================================================================
+
 class ScrollableTreeview(ttk.Frame):
-    """Treeview with both horizontal and vertical scrollbars."""
+    """
+    A Treeview widget with both horizontal and vertical scrollbars.
+
+    This custom widget wraps a ttk.Treeview in a canvas with scrollbars
+    to allow horizontal scrolling of wide tables. Standard Treeview
+    only supports vertical scrolling.
+
+    Attributes:
+        tree: The underlying ttk.Treeview widget
+        canvas: Canvas for horizontal scrolling
+        h_scroll: Horizontal scrollbar
+        v_scroll: Vertical scrollbar
+
+    Example:
+        >>> columns = ["name", "type", "action"]
+        >>> headings = ["Name", "Type", "Action"]
+        >>> widths = [200, 100, 100]
+        >>> tree = ScrollableTreeview(parent, columns, headings, widths)
+        >>> tree.tree.insert("", "end", values=("Device1", "Laptop", "CREATE"))
+    """
 
     def __init__(self, parent, columns, headings, widths=None, **kwargs):
+        """
+        Initialize the scrollable treeview.
+
+        Args:
+            parent: Parent widget
+            columns: List of column identifiers
+            headings: List of column header text
+            widths: Optional list of column widths (default: 120)
+            **kwargs: Additional arguments passed to Treeview
+        """
         super().__init__(parent)
 
-        # Create canvas and scrollbars
+        # Create canvas for horizontal scrolling
         self.canvas = tk.Canvas(self, highlightthickness=0)
+        # Horizontal scrollbar at bottom
         self.h_scroll = ttk.Scrollbar(self, orient=tk.HORIZONTAL, command=self.canvas.xview)
+        # Vertical scrollbar at right
         self.v_scroll = ttk.Scrollbar(self, orient=tk.VERTICAL, command=self.canvas.yview)
 
-        # Create inner frame for treeview
+        # Create inner frame to hold the treeview
         self.inner_frame = ttk.Frame(self.canvas)
 
-        # Create treeview
+        # Create the actual treeview widget
         self.tree = ttk.Treeview(self.inner_frame, columns=columns, show="headings", **kwargs)
 
-        # Configure columns
+        # Configure each column with heading and width
         for i, col in enumerate(columns):
             heading = headings[i] if i < len(headings) else col
             width = widths[i] if widths and i < len(widths) else 120
             self.tree.heading(col, text=heading)
             self.tree.column(col, width=width, minwidth=width)
 
-        # Tree scrollbar
+        # Vertical scrollbar for the treeview itself
         tree_scroll = ttk.Scrollbar(self.inner_frame, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=tree_scroll.set)
 
-        # Pack tree
+        # Pack treeview and its scrollbar
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Create window in canvas
+        # Create window in canvas to hold the inner frame
         self.canvas.create_window((0, 0), window=self.inner_frame, anchor="nw")
 
-        # Configure canvas scrolling
+        # Configure canvas horizontal scrolling
         self.canvas.configure(xscrollcommand=self.h_scroll.set)
+        # Update scroll region when frame size changes
         self.inner_frame.bind("<Configure>", self._on_frame_configure)
 
-        # Pack scrollbars and canvas
+        # Pack all components
         self.h_scroll.pack(side=tk.BOTTOM, fill=tk.X)
         self.v_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # Configure tags
-        self.tree.tag_configure("create", background="#fff3cd")
-        self.tree.tag_configure("update", background="#d4edda")
+        # Configure row colors for different actions
+        self.tree.tag_configure("create", background="#fff3cd")  # Yellow for CREATE
+        self.tree.tag_configure("update", background="#d4edda")  # Green for UPDATE
 
     def _on_frame_configure(self, event):
+        """Update canvas scroll region when frame size changes."""
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
 
+# =============================================================================
+# MAIN GUI CLASS
+# =============================================================================
+
 class SyncGUI:
-    """Main sync GUI application."""
+    """
+    Main Sync Manager GUI application.
+
+    This class creates and manages the main window for the CWtoSDP
+    synchronization tool. It provides:
+
+    - Sync preview showing all devices and their sync status
+    - Category breakdown of devices
+    - Field mapping reference
+    - Sync execution with dry run mode
+    - Results viewing and revert functionality
+    - Settings dialog for credential configuration
+
+    Attributes:
+        root: The main Tk window
+        engine: SyncEngine instance for building sync plans
+        items: List of SyncItem objects from the sync preview
+        summary: Dictionary with sync statistics
+        sync_in_progress: Flag to prevent concurrent syncs
+        notebook: Tabbed interface container
+        preview_tree: Treeview showing sync preview
+        category_tree: Treeview showing category breakdown
+        mapping_tree: Treeview showing field mappings
+
+    Example:
+        >>> gui = SyncGUI()
+        >>> gui.run()  # Starts the main event loop
+    """
 
     def __init__(self):
+        """
+        Initialize the Sync Manager GUI.
+
+        Creates the main window, initializes the sync engine,
+        and loads data from the database.
+        """
+        # Create main window
         self.root = tk.Tk()
         self.root.title("CWtoSDP - Sync Manager")
-        self.root.geometry("1600x900")
-        self.root.minsize(1400, 800)
+        self.root.geometry("1600x900")  # Default size
+        self.root.minsize(1400, 800)    # Minimum size
 
-        # Load sync engine
+        # Initialize sync engine (reads from SQLite database)
         self.engine = SyncEngine()
-        self.items: List[SyncItem] = []
-        self.summary: Dict = {}
-        self.sync_in_progress = False
 
+        # Data storage
+        self.items: List[SyncItem] = []  # Sync items from preview
+        self.summary: Dict = {}           # Summary statistics
+        self.sync_in_progress = False     # Prevent concurrent syncs
+
+        # Build the GUI layout
         self._create_layout()
+        # Load data from database
         self._load_data()
 
+    # =========================================================================
+    # LAYOUT CREATION
+    # =========================================================================
+
     def _create_layout(self):
-        """Create the main layout."""
-        # Main container
+        """
+        Create the main GUI layout.
+
+        Layout structure:
+        - Top: Summary section with stats and controls
+        - Middle: Notebook with tabs for different views
+        """
+        # Main container with padding
         main = ttk.Frame(self.root, padding="10")
         main.pack(fill=tk.BOTH, expand=True)
 
-        # Top: Summary cards and sync button
+        # Top section: Summary cards and sync controls
         self._create_summary_section(main)
 
-        # Middle: Notebook with tabs
+        # Middle section: Tabbed notebook
         self.notebook = ttk.Notebook(main)
         self.notebook.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
 
-        # Tab 1: Sync Preview (all fields)
+        # Tab 1: Sync Preview - shows all devices with sync status
         self.preview_frame = ttk.Frame(self.notebook, padding="5")
         self.notebook.add(self.preview_frame, text="Sync Preview")
         self._create_preview_tab()
 
-        # Tab 2: By Category (proper GUI)
+        # Tab 2: By Category - shows device counts by category
         self.category_frame = ttk.Frame(self.notebook, padding="5")
         self.notebook.add(self.category_frame, text="By Category")
         self._create_category_tab()
-        
-        # Tab 3: Field Mapping (proper GUI)
+
+        # Tab 3: Field Mapping - shows CW to SDP field mappings
         self.mapping_frame = ttk.Frame(self.notebook, padding="5")
         self.notebook.add(self.mapping_frame, text="Field Mapping")
         self._create_mapping_tab()
 
     def _create_summary_section(self, parent):
-        """Create summary cards at top with sync button and controls."""
+        """
+        Create the summary section at the top of the window.
+
+        Contains:
+        - Title label
+        - Sync controls (dry run checkbox, sync button, revert button)
+        - Data refresh buttons
+        - Settings button
+
+        Args:
+            parent: Parent widget to add the section to
+        """
         summary_frame = ttk.Frame(parent)
         summary_frame.pack(fill=tk.X, pady=(0, 10))
 
-        # Title
+        # Title on the left
         ttk.Label(summary_frame, text="CW → SDP Sync Manager",
                   font=("Segoe UI", 16, "bold")).pack(side=tk.LEFT)
 
-        # Right side controls frame
+        # Controls on the right
         controls_frame = ttk.Frame(summary_frame)
         controls_frame.pack(side=tk.RIGHT)
 
+        # -----------------------------------------------------------------
         # Row 1: Sync controls
+        # -----------------------------------------------------------------
         sync_row = ttk.Frame(controls_frame)
         sync_row.pack(fill=tk.X, pady=2)
 
-        # Dry run checkbox (checked by default = dry run mode)
+        # Dry run checkbox - unchecked by default (dry run mode)
+        # When checked, enables real sync operations
         self.real_sync_var = tk.BooleanVar(value=False)
         self.real_sync_check = ttk.Checkbutton(
             sync_row, text="Enable Real Sync", variable=self.real_sync_var,
@@ -144,30 +290,35 @@ class SyncGUI:
         )
         self.real_sync_check.pack(side=tk.LEFT, padx=5)
 
-        # Sync button (dry run by default)
+        # Sync button - text changes based on dry run mode
         self.sync_btn = ttk.Button(sync_row, text="🔍 Preview Sync (Dry Run)",
                                    command=self._execute_sync)
         self.sync_btn.pack(side=tk.LEFT, padx=5)
 
-        # Revert button
+        # Revert button - enabled after a successful sync
         self.revert_btn = ttk.Button(sync_row, text="↩️ Revert Last Sync",
                                      command=self._revert_sync, state=tk.DISABLED)
         self.revert_btn.pack(side=tk.LEFT, padx=5)
 
+        # -----------------------------------------------------------------
         # Row 2: Data refresh controls
+        # -----------------------------------------------------------------
         refresh_row = ttk.Frame(controls_frame)
         refresh_row.pack(fill=tk.X, pady=2)
 
+        # Refresh buttons for fetching fresh data from APIs
         ttk.Button(refresh_row, text="🔄 Refresh CW Data",
                    command=self._refresh_cw_data).pack(side=tk.LEFT, padx=5)
         ttk.Button(refresh_row, text="🔄 Refresh SDP Data",
                    command=self._refresh_sdp_data).pack(side=tk.LEFT, padx=5)
+        # Check for orphaned entries in database
         ttk.Button(refresh_row, text="🔍 Check Orphans",
                    command=self._check_orphans).pack(side=tk.LEFT, padx=5)
+        # Open settings dialog for credential configuration
         ttk.Button(refresh_row, text="⚙️ Settings",
                    command=self._open_settings).pack(side=tk.LEFT, padx=5)
 
-        # Stats will be added after data loads
+        # Stats labels will be added after data loads
         self.stats_frame = ttk.Frame(summary_frame)
         self.stats_frame.pack(side=tk.RIGHT, padx=20)
 
