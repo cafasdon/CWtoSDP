@@ -116,6 +116,154 @@ python -m src.main --sync
 python -m src.main --fetch-cw --fetch-sdp --export
 ```
 
+---
+
+## Automated Sync (Scheduled Tasks)
+
+The automation scripts allow you to run syncs without user interaction, perfect for scheduled tasks.
+
+### Quick Start
+
+| Platform    | Script             | One-time Run                   |
+| ----------- | ------------------ | ------------------------------ |
+| **Windows** | `run_sync.bat`     | Double-click or Task Scheduler |
+| **macOS**   | `run_sync.command` | Double-click or launchd        |
+| **Linux**   | `run_sync.sh`      | `./run_sync.sh` or cron        |
+
+### Command-Line Options
+
+```bash
+# Preview what would happen (dry run - safe)
+python run_sync.py --dry-run
+
+# Execute real sync with confirmation prompt
+python run_sync.py
+
+# Execute real sync without prompts (for automation)
+python run_sync.py --yes
+
+# Only create new items, skip updates
+python run_sync.py --create-only
+
+# Preview only (no execution even if prompted)
+python run_sync.py --preview-only
+```
+
+### Setting Up Scheduled Automation
+
+#### Windows Task Scheduler
+
+1. **Open Task Scheduler**: Press `Win + R`, type `taskschd.msc`, press Enter
+
+2. **Create Basic Task**:
+   - Click "Create Basic Task..." in the right panel
+   - Name: `CWtoSDP Sync`
+   - Description: `Sync ConnectWise devices to ServiceDesk Plus`
+
+3. **Set Trigger**:
+   - Choose frequency (Daily recommended)
+   - Set time (e.g., 2:00 AM when systems are idle)
+
+4. **Set Action**:
+   - Action: "Start a program"
+   - Program/script: `C:\Path\To\CWtoSDP\run_sync.bat`
+   - Start in: `C:\Path\To\CWtoSDP`
+
+5. **Configure Settings**:
+   - ✅ Run whether user is logged on or not
+   - ✅ Run with highest privileges
+   - Configure for: Windows 10/11
+
+#### macOS launchd
+
+1. **Create plist file**: Save as `~/Library/LaunchAgents/com.cwtosdp.sync.plist`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cwtosdp.sync</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/path/to/CWtoSDP/run_sync.command</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>2</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    <key>WorkingDirectory</key>
+    <string>/path/to/CWtoSDP</string>
+    <key>StandardOutPath</key>
+    <string>/path/to/CWtoSDP/logs/launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/path/to/CWtoSDP/logs/launchd_error.log</string>
+</dict>
+</plist>
+```
+
+2. **Load the job**:
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.cwtosdp.sync.plist
+```
+
+#### Linux Cron
+
+1. **Edit crontab**:
+
+```bash
+crontab -e
+```
+
+2. **Add schedule** (runs daily at 2:00 AM):
+
+```cron
+0 2 * * * cd /path/to/CWtoSDP && ./run_sync.sh >> logs/cron.log 2>&1
+```
+
+### Automation Best Practices
+
+| Recommendation                | Reason                                              |
+| ----------------------------- | --------------------------------------------------- |
+| Run at off-peak hours         | Avoid API rate limits during business hours         |
+| Use `--create-only` initially | Safer than updating existing records                |
+| Check logs regularly          | Monitor `logs/` folder for errors                   |
+| Test with `--dry-run` first   | Verify behavior before scheduling                   |
+| Keep credentials secure       | Ensure `credentials.env` has restricted permissions |
+
+### Sync Results
+
+After each run, results are saved to `logs/sync_results_YYYYMMDD_HHMMSS.json`:
+
+```json
+{
+  "timestamp": "2026-01-20T02:00:00",
+  "dry_run": false,
+  "total_items": 204,
+  "created": 15,
+  "updated": 32,
+  "skipped": 157,
+  "errors": 0,
+  "items": [...]
+}
+```
+
+### Troubleshooting Automation
+
+| Issue                 | Solution                                        |
+| --------------------- | ----------------------------------------------- |
+| Script not running    | Check file permissions (`chmod +x` on Unix)     |
+| Credentials not found | Ensure `credentials.env` exists in project root |
+| Rate limit errors     | Increase delay between runs (hourly → daily)    |
+| No output             | Check Task Scheduler history or cron logs       |
+
+---
+
 ## Safety Features
 
 ⚠️ **DRY_RUN mode is ENABLED by default**
@@ -129,22 +277,28 @@ python -m src.main --fetch-cw --fetch-sdp --export
 
 ## Folder Structure
 
-```
+```text
 CWtoSDP/
-├── src/                      # Source code
-│   ├── config.py             # Configuration management
-│   ├── cw_client.py          # ConnectWise API client
-│   ├── sdp_client.py         # ServiceDesk Plus API client
-│   ├── sync_engine.py        # Sync logic and matching
-│   ├── sync_gui.py           # Sync Manager GUI
-│   ├── field_mapper.py       # Device classification
-│   └── main.py               # Entry point
-├── data/                     # SQLite databases
-├── logs/                     # Application logs
-├── install.bat/.command/.sh  # Platform installers
-├── launch_sync.bat/.command/.sh  # Platform launchers
-├── credentials.env.template  # Credential template
-└── requirements.txt          # Python dependencies
+├── src/                          # Source code
+│   ├── config.py                 # Configuration management
+│   ├── cw_client.py              # ConnectWise API client
+│   ├── sdp_client.py             # ServiceDesk Plus API client
+│   ├── sync_engine.py            # Sync logic and matching
+│   ├── sync_gui.py               # Sync Manager GUI
+│   ├── field_mapper.py           # Device classification
+│   ├── db_compare.py             # SQLite comparison database
+│   ├── rate_limiter.py           # Adaptive rate limiting
+│   ├── logger.py                 # Logging configuration
+│   └── main.py                   # Entry point
+├── data/                         # SQLite databases
+├── logs/                         # Application logs
+├── docs/                         # API documentation
+├── install.bat/.command/.sh      # Platform installers
+├── launch_sync.bat/.command/.sh  # GUI launchers
+├── run_sync.bat/.command/.sh     # Automation launchers
+├── run_sync.py                   # Automation script
+├── credentials.env.template      # Credential template
+└── requirements.txt              # Python dependencies
 ```
 
 ## Device Classification
