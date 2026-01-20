@@ -14,11 +14,16 @@ venv/
 ENV/
 env/
 .venv/
+*.egg-info/
+dist/
+build/
 
 # Output files
 *.csv
 *.json
 *.xlsx
+output/
+logs/
 
 # IDE
 .vscode/
