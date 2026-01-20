@@ -818,42 +818,60 @@ class SyncGUI:
         self.selection_label.config(text=f"Selected: {count} ({create_count} CREATE)")
 
     def _execute_sync(self):
-        """Execute sync: CREATE only (no overwrites). Dry run by default. Uses selection if any."""
+        """
+        Execute sync: CREATE new items and UPDATE existing items.
+
+        Dry run by default for safety. Uses selection if any items are selected,
+        otherwise syncs all CREATE and UPDATE items.
+        """
         if self.sync_in_progress:
             messagebox.showwarning("Sync in Progress", "A sync operation is already running.")
             return
 
         is_dry_run = not self.real_sync_var.get()
 
-        # Get items to sync - use selection if any, otherwise all CREATE items
+        # Get items to sync - use selection if any, otherwise all CREATE and UPDATE items
         if self.selected_items:
-            # Only selected CREATE items
+            # Selected CREATE and UPDATE items
             sync_items = [i for i in self.items
-                         if i.cw_name in self.selected_items and i.action == SyncAction.CREATE]
+                         if i.cw_name in self.selected_items and
+                         i.action in (SyncAction.CREATE, SyncAction.UPDATE)]
             selection_mode = "SELECTED"
         else:
-            # All CREATE items
-            sync_items = [i for i in self.items if i.action == SyncAction.CREATE]
+            # All CREATE and UPDATE items
+            sync_items = [i for i in self.items
+                         if i.action in (SyncAction.CREATE, SyncAction.UPDATE)]
             selection_mode = "ALL"
 
         if not sync_items:
             if self.selected_items:
                 messagebox.showinfo("Nothing to Sync",
-                    "No CREATE items in your selection.\n\nNote: Only CREATE items can be synced (UPDATE items are skipped).")
+                    "No CREATE or UPDATE items in your selection.")
             else:
-                messagebox.showinfo("Nothing to Create", "All CW devices already exist in SDP. Nothing to create.")
+                messagebox.showinfo("Nothing to Sync",
+                    "No items need syncing. All CW devices are already up-to-date in SDP.")
             return
+
+        # Count by action type
+        create_items = [i for i in sync_items if i.action == SyncAction.CREATE]
+        update_items = [i for i in sync_items if i.action == SyncAction.UPDATE]
 
         # Build confirmation message
         mode_text = "DRY RUN (preview only)" if is_dry_run else "REAL SYNC"
         msg = f"Mode: {mode_text}\n"
         msg += f"Selection: {selection_mode} ({len(sync_items)} items)\n\n"
-        msg += f"This will CREATE {len(sync_items)} new assets in SDP.\n\n"
-        msg += "By Category:\n"
+
+        if create_items:
+            msg += f"📝 CREATE: {len(create_items)} new assets\n"
+        if update_items:
+            msg += f"🔄 UPDATE: {len(update_items)} existing assets\n"
+
+        msg += "\nBy Category:\n"
         for cat in sorted(set(i.cw_category for i in sync_items)):
-            count = len([i for i in sync_items if i.cw_category == cat])
-            msg += f"  • {cat}: {count}\n"
-        msg += "\nExisting matches will be SKIPPED (no overwrites).\n"
+            cat_items = [i for i in sync_items if i.cw_category == cat]
+            creates = len([i for i in cat_items if i.action == SyncAction.CREATE])
+            updates = len([i for i in cat_items if i.action == SyncAction.UPDATE])
+            msg += f"  • {cat}: {creates} create, {updates} update\n"
 
         if not is_dry_run:
             msg += "\n⚠️ WARNING: This will make REAL changes to SDP!\n"
@@ -899,7 +917,12 @@ class SyncGUI:
         self.progress_log.pack(pady=10, padx=10, fill=tk.BOTH, expand=True)
 
     def _run_sync_thread(self, items: List[SyncItem], is_dry_run: bool):
-        """Run sync in background thread."""
+        """
+        Run sync in background thread.
+
+        Handles both CREATE (new items) and UPDATE (existing items) operations.
+        Tracks created IDs for revert capability.
+        """
         from .sdp_client import SDPClient
         from datetime import datetime
 
@@ -921,38 +944,77 @@ class SyncGUI:
                 "name": item.cw_name,
                 "category": item.cw_category,
                 "ci_type": item.sdp_ci_type,
+                "action": item.action.value.upper(),
                 "status": "pending",
                 "message": "",
-                "sdp_id": None
+                "sdp_id": item.sdp_id  # Pre-fill for UPDATE items
             }
 
             try:
-                # Create the asset in SDP
-                result = sdp.create_ci(item.sdp_ci_type, item.fields_to_sync)
-                if result:
-                    success_count += 1
-                    if is_dry_run:
-                        log_msg = f"[DRY] Would create: {item.cw_name} → {item.sdp_ci_type}"
-                        result_entry["status"] = "would_create"
-                        result_entry["message"] = "Would be created (dry run)"
+                if item.action == SyncAction.CREATE:
+                    # =========================================================
+                    # CREATE: New asset in SDP
+                    # =========================================================
+                    result = sdp.create_ci(item.sdp_ci_type, item.fields_to_sync)
+                    if result:
+                        success_count += 1
+                        if is_dry_run:
+                            log_msg = f"[DRY] Would create: {item.cw_name} → {item.sdp_ci_type}"
+                            result_entry["status"] = "would_create"
+                            result_entry["message"] = "Would be created (dry run)"
+                        else:
+                            log_msg = f"✓ Created: {item.cw_name}"
+                            result_entry["status"] = "created"
+                            result_entry["message"] = "Created successfully"
+                            # Track for revert
+                            sdp_id = result.get(item.sdp_ci_type, {}).get("id")
+                            if sdp_id:
+                                result_entry["sdp_id"] = sdp_id
+                                created_ids.append({
+                                    "sdp_id": sdp_id,
+                                    "ci_type": item.sdp_ci_type,
+                                    "name": item.cw_name,
+                                    "action": "create"
+                                })
                     else:
-                        log_msg = f"✓ Created: {item.cw_name}"
-                        result_entry["status"] = "success"
-                        result_entry["message"] = "Created successfully"
-                        # Track for revert
-                        sdp_id = result.get(item.sdp_ci_type, {}).get("id")
-                        if sdp_id:
-                            result_entry["sdp_id"] = sdp_id
-                            created_ids.append({
-                                "sdp_id": sdp_id,
-                                "ci_type": item.sdp_ci_type,
-                                "name": item.cw_name
-                            })
+                        error_count += 1
+                        log_msg = f"✗ Create failed: {item.cw_name}"
+                        result_entry["status"] = "failed"
+                        result_entry["message"] = "API returned no result"
+
+                elif item.action == SyncAction.UPDATE:
+                    # =========================================================
+                    # UPDATE: Existing asset in SDP
+                    # =========================================================
+                    if not item.sdp_id:
+                        error_count += 1
+                        log_msg = f"✗ Update failed: {item.cw_name} - No SDP ID"
+                        result_entry["status"] = "failed"
+                        result_entry["message"] = "Missing SDP ID for update"
+                    else:
+                        result = sdp.update_ci(item.sdp_ci_type, item.sdp_id, item.fields_to_sync)
+                        if result:
+                            success_count += 1
+                            if is_dry_run:
+                                log_msg = f"[DRY] Would update: {item.cw_name} (ID: {item.sdp_id})"
+                                result_entry["status"] = "would_update"
+                                result_entry["message"] = f"Would update SDP ID {item.sdp_id} (dry run)"
+                            else:
+                                log_msg = f"🔄 Updated: {item.cw_name}"
+                                result_entry["status"] = "updated"
+                                result_entry["message"] = f"Updated SDP ID {item.sdp_id}"
+                        else:
+                            error_count += 1
+                            log_msg = f"✗ Update failed: {item.cw_name}"
+                            result_entry["status"] = "failed"
+                            result_entry["message"] = "API returned no result"
+
                 else:
-                    error_count += 1
-                    log_msg = f"✗ Failed: {item.cw_name}"
-                    result_entry["status"] = "failed"
-                    result_entry["message"] = "API returned no result"
+                    # SKIP or other action - shouldn't happen but handle gracefully
+                    log_msg = f"⊘ Skipped: {item.cw_name} ({item.action.value})"
+                    result_entry["status"] = "skipped"
+                    result_entry["message"] = f"Action: {item.action.value}"
+
             except Exception as e:
                 error_count += 1
                 error_msg = str(e)[:100]
@@ -965,7 +1027,7 @@ class SyncGUI:
             # Update UI in main thread
             self.root.after(0, lambda i=i, msg=log_msg: self._update_progress(i + 1, len(items), msg))
 
-        # Save created IDs for revert (if real sync)
+        # Save created IDs for revert (if real sync - only CREATEs can be reverted)
         if not is_dry_run and created_ids:
             self._save_sync_log(created_ids)
 

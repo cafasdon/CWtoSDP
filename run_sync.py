@@ -251,11 +251,41 @@ def run_sync(
                     results["error_details"].append(f"Create failed: {item.cw_name}")
 
             elif item.action == SyncAction.UPDATE:
-                # TODO: Implement update logic when needed
-                logger.debug(f"  [SKIP] Update not implemented: {item.cw_name}")
-                results["skipped"] += 1
+                # =============================================================
+                # UPDATE: Sync changes to existing SDP asset
+                # =============================================================
+                if not item.sdp_id:
+                    logger.warning(f"  ✗ Cannot update {item.cw_name}: Missing SDP ID")
+                    results["errors"] += 1
+                    results["error_details"].append(f"Update failed (no SDP ID): {item.cw_name}")
+                    continue
+
+                # Prepare CI data for update
+                ci_data = {
+                    "name": item.fields_to_sync.get("name", item.cw_name),
+                }
+                # Add all CI attributes
+                for key, value in item.fields_to_sync.items():
+                    if key.startswith("ci_attributes_") and value:
+                        ci_data[key] = value
+
+                # Perform update via SDP API
+                result = sdp_client.update_ci(item.sdp_ci_type, item.sdp_id, ci_data)
+
+                if result:
+                    if dry_run:
+                        logger.info(f"  [DRY RUN] Would update: {item.cw_name} (SDP ID: {item.sdp_id})")
+                    else:
+                        logger.info(f"  🔄 Updated: {item.cw_name} (SDP ID: {item.sdp_id})")
+                    results["updated"] += 1
+                else:
+                    logger.warning(f"  ✗ Failed to update: {item.cw_name}")
+                    results["errors"] += 1
+                    results["error_details"].append(f"Update failed: {item.cw_name}")
 
             else:
+                # SKIP or unknown action
+                logger.debug(f"  [SKIP] {item.cw_name} ({item.action.value})")
                 results["skipped"] += 1
 
         except Exception as e:

@@ -574,6 +574,79 @@ class ServiceDeskPlusClient:
             logger.error(f"Failed to create {ci_type}: {e}")
             return None
 
+    def update_ci(self, ci_type: str, ci_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Update an existing CI (Configuration Item) in CMDB.
+
+        This method updates an existing CI with new field values from ConnectWise.
+        Only non-empty fields are updated; existing values are preserved for
+        fields not included in the update.
+
+        SAFETY: This operation is BLOCKED if dry_run=True (default).
+
+        Args:
+            ci_type: The CI type to update. Valid types include:
+                    - "ci_windows_workstation" - Windows laptops/desktops
+                    - "ci_virtual_machine" - Virtual servers
+                    - "ci_windows_server" - Physical Windows servers
+                    - "ci_switch" - Network devices
+            ci_id: The unique CI ID in SDP to update
+            data: Dictionary of field values to update. Common fields:
+                    - "name": CI name
+                    - "ci_attributes_serial_number": Serial number
+                    - "ci_attributes_ip_address": IP address
+                    - etc.
+
+        Returns:
+            Updated CI data dictionary if successful
+            {"dry_run": True, ...} if in dry_run mode
+            None if update failed
+
+        Example:
+            >>> client = ServiceDeskPlusClient(config, dry_run=False)
+            >>> result = client.update_ci("ci_windows_workstation", "123456", {
+            ...     "ci_attributes_ip_address": "192.168.1.100"
+            ... })
+        """
+        # SAFETY: Block in dry_run mode
+        if self.dry_run:
+            logger.info(f"[DRY RUN] Would update {ci_type}/{ci_id}: {data.get('name', 'unknown')}")
+            return {"dry_run": True, "would_update": data, "ci_id": ci_id}
+
+        import json
+
+        # Build the request payload (same structure as create)
+        # SDP expects nested structure: {"ci_type": {"name": "...", "ci_attributes": {...}}}
+        ci_data = {ci_type: {}}
+
+        # Map fields to proper structure
+        for key, value in data.items():
+            # Skip empty values
+            if value is None or value == "":
+                continue
+
+            if key == "name":
+                # Name goes at top level
+                ci_data[ci_type]["name"] = value
+            elif key.startswith("ci_attributes_"):
+                # Attributes go under ci_attributes object
+                if "ci_attributes" not in ci_data[ci_type]:
+                    ci_data[ci_type]["ci_attributes"] = {}
+                # Keep full field name as SDP expects it
+                ci_data[ci_type]["ci_attributes"][key] = value
+
+        # Build endpoint and payload - PUT to specific CI ID
+        endpoint = f"/cmdb/{ci_type}/{ci_id}"
+        input_data = {"input_data": json.dumps(ci_data)}
+
+        try:
+            result = self._make_request("PUT", endpoint, data=input_data)
+            logger.info(f"Updated {ci_type}/{ci_id}: {data.get('name', 'unknown')}")
+            return result
+        except ServiceDeskPlusClientError as e:
+            logger.error(f"Failed to update {ci_type}/{ci_id}: {e}")
+            return None
+
     def delete_ci(self, ci_type: str, ci_id: str) -> bool:
         """
         Delete a CI (Configuration Item) from CMDB.
