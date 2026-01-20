@@ -145,8 +145,8 @@ class ScrollableTreeview(ttk.Frame):
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         # Configure row colors for different actions
-        self.tree.tag_configure("create", background="#fff3cd")  # Yellow for CREATE
-        self.tree.tag_configure("update", background="#d4edda")  # Green for UPDATE
+        self.tree.tag_configure("create", background="#d4edda")  # Light green for CREATE
+        self.tree.tag_configure("update", background="#cce5ff")  # Light blue for UPDATE
 
     def _on_frame_configure(self, event):
         """Update canvas scroll region when frame size changes."""
@@ -407,10 +407,13 @@ class SyncGUI:
         self.tree.bind("<space>", self._toggle_selected_items)
 
         # Configure tags for colors
-        self.tree.tag_configure("create", background="#fff3cd")  # Yellow - not selected
-        self.tree.tag_configure("update", background="#d4edda")  # Green - not selected
-        self.tree.tag_configure("selected_create", background="#ffc107")  # Darker yellow - selected
-        self.tree.tag_configure("selected_update", background="#28a745")  # Darker green - selected
+        # CREATE items: Green tones (new items to be added)
+        self.tree.tag_configure("create", background="#d4edda")  # Light green - not selected
+        self.tree.tag_configure("selected_create", background="#28a745", foreground="white")  # Dark green - selected
+
+        # UPDATE items: Blue/cyan tones (existing items to be modified)
+        self.tree.tag_configure("update", background="#cce5ff")  # Light blue - not selected
+        self.tree.tag_configure("selected_update", background="#007bff", foreground="white")  # Dark blue - selected
 
         # Track selected items by their ID (cw_name)
         self.selected_items = set()
@@ -473,9 +476,9 @@ class SyncGUI:
         self.cat_device_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         dev_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Tags for coloring
-        self.cat_device_tree.tag_configure("create", background="#fff3cd")
-        self.cat_device_tree.tag_configure("update", background="#d4edda")
+        # Tags for coloring (consistent with main tree)
+        self.cat_device_tree.tag_configure("create", background="#d4edda")  # Light green
+        self.cat_device_tree.tag_configure("update", background="#cce5ff")  # Light blue
 
     def _create_mapping_tab(self):
         """Create field mapping reference tab as proper GUI."""
@@ -1172,18 +1175,29 @@ class SyncGUI:
         tree_frame.grid_rowconfigure(0, weight=1)
         tree_frame.grid_columnconfigure(0, weight=1)
 
-        # Configure tags
-        results_tree.tag_configure("success", background="#d4edda")
-        results_tree.tag_configure("would_create", background="#d1ecf1")
-        results_tree.tag_configure("failed", background="#f8d7da")
-        results_tree.tag_configure("error", background="#f5c6cb")
+        # Configure tags for result statuses
+        # CREATE results (green tones)
+        results_tree.tag_configure("created", background="#d4edda")      # Light green - created
+        results_tree.tag_configure("would_create", background="#c3e6cb") # Pale green - dry run create
+
+        # UPDATE results (blue tones)
+        results_tree.tag_configure("updated", background="#cce5ff")      # Light blue - updated
+        results_tree.tag_configure("would_update", background="#b8daff") # Pale blue - dry run update
+
+        # Error/failure states (red tones)
+        results_tree.tag_configure("failed", background="#f8d7da")       # Light red
+        results_tree.tag_configure("error", background="#f5c6cb")        # Darker red
+        results_tree.tag_configure("skipped", background="#e2e3e5")      # Gray
 
         # Status icons
         status_icons = {
-            "success": "✓",
+            "created": "✓",
             "would_create": "○",
+            "updated": "🔄",
+            "would_update": "◐",
             "failed": "✗",
             "error": "⚠",
+            "skipped": "⊘",
             "pending": "?"
         }
 
