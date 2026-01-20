@@ -987,12 +987,28 @@ class SyncGUI:
     def _do_refresh_cw(self):
         """Background thread for CW refresh."""
         try:
-            from .db_compare import ComparisonDatabase
-            db = ComparisonDatabase()
-            db.fetch_cw_devices_full()
+            from .cw_client import ConnectWiseClient
+            from .config import load_config
+            from .db_compare import CompareDatabase
+
+            # Load config and create client
+            config = load_config()
+            cw_client = ConnectWiseClient(config)
+
+            # Fetch all endpoints
+            logger.info("Fetching all CW endpoints...")
+            endpoints = cw_client.get_devices()
+            logger.info(f"Fetched {len(endpoints)} endpoints from CW")
+
+            # Store in database
+            db = CompareDatabase()
+            stored = db.store_cw_devices_full(endpoints)
             db.close()
-            self.root.after(0, lambda: self._refresh_complete("ConnectWise"))
+
+            logger.info(f"Stored {stored} CW devices in database")
+            self.root.after(0, lambda: self._refresh_complete("ConnectWise", stored))
         except Exception as e:
+            logger.error(f"CW refresh failed: {e}")
             self.root.after(0, lambda: messagebox.showerror("Error", f"CW refresh failed: {e}"))
             self.root.after(0, lambda: self.sync_btn.config(state=tk.NORMAL))
 
@@ -1008,19 +1024,38 @@ class SyncGUI:
     def _do_refresh_sdp(self):
         """Background thread for SDP refresh."""
         try:
-            from .db_compare import ComparisonDatabase
-            db = ComparisonDatabase()
-            db.fetch_sdp_workstations_full()
+            from .sdp_client import ServiceDeskPlusClient
+            from .config import load_sdp_config
+            from .db_compare import CompareDatabase
+
+            # Load config and create client
+            config = load_sdp_config()
+            sdp_client = ServiceDeskPlusClient(config)
+
+            # Fetch all workstations
+            logger.info("Fetching all SDP workstations...")
+            workstations = sdp_client.get_all_cmdb_workstations()
+            logger.info(f"Fetched {len(workstations)} workstations from SDP")
+
+            # Store in database
+            db = CompareDatabase()
+            stored = db.store_sdp_workstations_full(workstations)
             db.close()
-            self.root.after(0, lambda: self._refresh_complete("ServiceDesk Plus"))
+
+            logger.info(f"Stored {stored} SDP workstations in database")
+            self.root.after(0, lambda: self._refresh_complete("ServiceDesk Plus", stored))
         except Exception as e:
+            logger.error(f"SDP refresh failed: {e}")
             self.root.after(0, lambda: messagebox.showerror("Error", f"SDP refresh failed: {e}"))
             self.root.after(0, lambda: self.sync_btn.config(state=tk.NORMAL))
 
-    def _refresh_complete(self, source: str):
+    def _refresh_complete(self, source: str, count: int = 0):
         """Handle refresh completion."""
         self.sync_btn.config(state=tk.NORMAL)
-        messagebox.showinfo("Refresh Complete", f"{source} data refreshed successfully.")
+        msg = f"{source} data refreshed successfully."
+        if count > 0:
+            msg += f"\n\nFetched and stored {count} records."
+        messagebox.showinfo("Refresh Complete", msg)
         self._load_data()
 
     def _check_orphans(self):
