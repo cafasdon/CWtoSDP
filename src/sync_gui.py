@@ -603,7 +603,7 @@ class SyncGUI:
             # For UPDATE items, get field change status and annotate values
             if item.action == SyncAction.UPDATE:
                 changes = item.get_field_changes()
-                display_fields = self._format_fields_with_changes(fields, changes)
+                display_fields = self._format_fields_with_changes(fields, changes, item.sdp_existing_fields)
             else:
                 # CREATE items - all fields are new (show with ★)
                 display_fields = {k: f"★ {v}" if v else "" for k, v in fields.items()}
@@ -626,20 +626,22 @@ class SyncGUI:
 
         self._update_selection_label()
 
-    def _format_fields_with_changes(self, fields: dict, changes: dict) -> dict:
+    def _format_fields_with_changes(self, fields: dict, changes: dict, existing: dict = None) -> dict:
         """
         Format field values with change indicators for UPDATE items.
 
         Args:
             fields: Dictionary of field names to new values (from CW)
             changes: Dictionary of field names to change types (new/changed/unchanged)
+            existing: Dictionary of current SDP values (for showing old→new)
 
         Returns:
             Dictionary with formatted display values:
             - ★ value = NEW (field will be added to SDP)
-            - ↻ value = CHANGED (field will be updated in SDP)
+            - old → new = CHANGED (shows both old and new value)
             - value = UNCHANGED (same value, no change)
         """
+        existing = existing or {}
         display = {}
         for field_name, value in fields.items():
             if not value:
@@ -648,11 +650,15 @@ class SyncGUI:
 
             change_type = changes.get(field_name, "unchanged")
             if change_type == "new":
-                display[field_name] = f"★ {value}"  # Star = new field
+                display[field_name] = f"★ {value}"  # Star = new field (was empty)
             elif change_type == "changed":
-                display[field_name] = f"↻ {value}"  # Cycle = changed field
+                old_val = existing.get(field_name, "")
+                # Truncate long values for display
+                old_display = str(old_val)[:20] + "..." if len(str(old_val)) > 20 else str(old_val)
+                new_display = str(value)[:20] + "..." if len(str(value)) > 20 else str(value)
+                display[field_name] = f"{old_display} → {new_display}"  # Show old→new
             else:
-                display[field_name] = str(value)  # No prefix = unchanged
+                display[field_name] = str(value)  # No indicator = unchanged
 
         return display
 
@@ -814,7 +820,7 @@ class SyncGUI:
         # Format fields with change indicators (same logic as _populate_tree)
         if item.action == SyncAction.UPDATE:
             changes = item.get_field_changes()
-            display_fields = self._format_fields_with_changes(fields, changes)
+            display_fields = self._format_fields_with_changes(fields, changes, item.sdp_existing_fields)
         else:
             display_fields = {k: f"★ {v}" if v else "" for k, v in fields.items()}
 
