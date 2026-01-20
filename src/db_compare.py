@@ -1,8 +1,72 @@
 """
-Comparison Database for CWtoSDP.
+================================================================================
+Comparison Database for CWtoSDP
+================================================================================
 
-Creates normalized tables with ALL fields from ConnectWise and ServiceDesk Plus
-for direct 1:1 field comparison via SQL queries.
+This module provides a SQLite database for storing and comparing device data
+from ConnectWise RMM and ServiceDesk Plus. It handles:
+
+1. Dynamic table creation based on API response fields
+2. Flattening nested JSON into flat columns
+3. Tracking which records have been fetched
+4. Providing comparison utilities
+
+Database Schema:
+----------------
+The database contains these main tables:
+
+1. cw_devices_full - ConnectWise devices with ALL fields as columns
+   - endpointID: Unique CW identifier
+   - friendlyName: Computer name
+   - system_serialNumber: Serial number
+   - os_product: Operating system
+   - raw_json: Original JSON for reference
+   - fetched_at: Timestamp of fetch
+   - ... (many more dynamically created columns)
+
+2. sdp_workstations_full - SDP workstations with ALL fields as columns
+   - sdp_id: Unique SDP identifier
+   - name: CI name
+   - ci_attributes_txt_serial_number: Serial number
+   - raw_json: Original JSON for reference
+   - fetched_at: Timestamp of fetch
+   - ... (many more dynamically created columns)
+
+3. fetch_tracker - Tracks which records have been fetched
+   - source: "cw" or "sdp"
+   - record_id: The unique ID
+   - fetched_at: Timestamp
+
+Dynamic Column Creation:
+------------------------
+Unlike traditional databases with fixed schemas, this database creates
+columns dynamically based on the data received from APIs. This allows
+storing ALL fields without knowing them in advance.
+
+Nested JSON is flattened using underscore notation:
+- device.system.serialNumber → system_serialNumber
+- device.os.product → os_product
+
+Usage Example:
+--------------
+    from src.db_compare import CompareDatabase
+
+    db = CompareDatabase()
+
+    # Store CW devices
+    db.store_cw_devices_full(cw_devices)
+
+    # Store SDP workstations
+    db.store_sdp_workstations_full(sdp_workstations)
+
+    # Compare columns
+    comparison = db.get_column_comparison()
+    print(f"CW-only columns: {comparison['cw_only']}")
+
+    # Custom query
+    results = db.query("SELECT name, system_serialNumber FROM cw_devices_full")
+
+    db.close()
 """
 
 import json
@@ -13,39 +77,106 @@ from typing import Any, Dict, List, Optional
 
 from .logger import get_logger
 
+# Create a logger for this module
 logger = get_logger("cwtosdp.db_compare")
 
+# Default database path (relative to project root)
 DEFAULT_DB_PATH = Path("./data/cwtosdp_compare.db")
 
 
+# =============================================================================
+# MAIN DATABASE CLASS
+# =============================================================================
+
 class CompareDatabase:
     """
-    Comparison database with full field extraction from both sources.
+    SQLite database for storing and comparing CW and SDP device data.
 
-    Creates two main tables:
-    - cw_devices_full: All ConnectWise endpoint fields flattened
-    - sdp_workstations_full: All ServiceDesk Plus CI fields flattened
+    This class provides methods for:
+    - Storing device data with dynamic column creation
+    - Tracking which records have been fetched
+    - Comparing columns between CW and SDP tables
+    - Running custom SQL queries
+
+    The database uses dynamic schema - columns are created based on the
+    fields present in the API responses. This allows storing ALL fields
+    without knowing them in advance.
+
+    Attributes:
+        db_path: Path to the SQLite database file
+        _conn: SQLite connection (lazy-initialized)
+
+    Example:
+        >>> db = CompareDatabase()
+        >>> db.store_cw_devices_full(devices)
+        >>> columns = db.get_cw_columns()
+        >>> db.close()
     """
 
     def __init__(self, db_path: Optional[Path] = None):
+        """
+        Initialize the comparison database.
+
+        Args:
+            db_path: Path to SQLite database file.
+                    Defaults to ./data/cwtosdp_compare.db
+
+        Note:
+            Creates the data/ directory if it doesn't exist.
+            Connection is lazy-initialized on first use.
+        """
         self.db_path = db_path or DEFAULT_DB_PATH
+        # Ensure parent directory exists
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        # Lazy connection - initialized on first use
         self._conn: Optional[sqlite3.Connection] = None
         logger.info(f"Comparison database at {self.db_path}")
 
+    # =========================================================================
+    # CONNECTION MANAGEMENT
+    # =========================================================================
+
     def _get_connection(self) -> sqlite3.Connection:
+        """
+        Get or create the SQLite connection.
+
+        Uses lazy initialization - connection is only created when first needed.
+        Uses Row factory for dict-like access to query results.
+
+        Returns:
+            SQLite connection object
+        """
         if self._conn is None:
             self._conn = sqlite3.connect(str(self.db_path))
+            # Row factory allows accessing columns by name
             self._conn.row_factory = sqlite3.Row
         return self._conn
 
     def close(self):
+        """
+        Close the database connection.
+
+        Should be called when done with the database to release resources.
+        """
         if self._conn:
             self._conn.close()
             self._conn = None
 
+    # =========================================================================
+    # FETCH TRACKING
+    # =========================================================================
+    # These methods track which records have been fetched from APIs.
+    # This allows resuming interrupted fetches without re-fetching everything.
+
     def _init_fetch_tracker(self):
-        """Initialize table to track which IDs have been fetched."""
+        """
+        Initialize the fetch_tracker table if it doesn't exist.
+
+        The fetch_tracker table stores:
+        - source: "cw" or "sdp"
+        - record_id: The unique ID of the record
+        - fetched_at: ISO timestamp of when it was fetched
+        """
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute("""
@@ -59,7 +190,16 @@ class CompareDatabase:
         conn.commit()
 
     def is_fetched(self, source: str, record_id: str) -> bool:
-        """Check if a record has already been fetched."""
+        """
+        Check if a record has already been fetched.
+
+        Args:
+            source: "cw" or "sdp"
+            record_id: The unique ID to check
+
+        Returns:
+            True if already fetched, False otherwise
+        """
         self._init_fetch_tracker()
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -70,7 +210,13 @@ class CompareDatabase:
         return cursor.fetchone() is not None
 
     def mark_fetched(self, source: str, record_id: str):
-        """Mark a record as fetched."""
+        """
+        Mark a record as fetched.
+
+        Args:
+            source: "cw" or "sdp"
+            record_id: The unique ID to mark
+        """
         self._init_fetch_tracker()
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -81,7 +227,15 @@ class CompareDatabase:
         conn.commit()
 
     def get_fetched_ids(self, source: str) -> set:
-        """Get all fetched IDs for a source."""
+        """
+        Get all fetched IDs for a source.
+
+        Args:
+            source: "cw" or "sdp"
+
+        Returns:
+            Set of record IDs that have been fetched
+        """
         self._init_fetch_tracker()
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -89,7 +243,12 @@ class CompareDatabase:
         return {row[0] for row in cursor.fetchall()}
 
     def get_fetch_stats(self) -> Dict[str, int]:
-        """Get count of fetched records per source."""
+        """
+        Get count of fetched records per source.
+
+        Returns:
+            Dictionary like {"cw": 204, "sdp": 150}
+        """
         self._init_fetch_tracker()
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -97,7 +256,13 @@ class CompareDatabase:
         return {row[0]: row[1] for row in cursor.fetchall()}
 
     def clear_fetch_tracker(self, source: Optional[str] = None):
-        """Clear fetch tracker (all or for a specific source)."""
+        """
+        Clear fetch tracker (all or for a specific source).
+
+        Args:
+            source: If provided, only clear that source.
+                   If None, clear all sources.
+        """
         self._init_fetch_tracker()
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -107,15 +272,37 @@ class CompareDatabase:
             cursor.execute("DELETE FROM fetch_tracker")
         conn.commit()
 
+    # =========================================================================
+    # DATA TRANSFORMATION HELPERS
+    # =========================================================================
+
     def _flatten_dict(self, d: Dict, prefix: str = "") -> Dict[str, Any]:
-        """Flatten a nested dictionary into dot-notation keys."""
+        """
+        Flatten a nested dictionary into underscore-separated keys.
+
+        Converts nested structures like:
+            {"system": {"serialNumber": "ABC123"}}
+        Into flat structures like:
+            {"system_serialNumber": "ABC123"}
+
+        Lists are converted to JSON strings.
+
+        Args:
+            d: Dictionary to flatten
+            prefix: Prefix for keys (used in recursion)
+
+        Returns:
+            Flattened dictionary with sanitized keys
+        """
         items = {}
         for key, value in d.items():
+            # Build new key with prefix
             new_key = f"{prefix}_{key}" if prefix else key
-            # Sanitize key for SQLite column name
+            # Sanitize key for SQLite column name (no dots, dashes, spaces)
             new_key = new_key.replace(".", "_").replace("-", "_").replace(" ", "_")
 
             if isinstance(value, dict):
+                # Recursively flatten nested dicts
                 items.update(self._flatten_dict(value, new_key))
             elif isinstance(value, list):
                 # Store lists as JSON strings
@@ -127,7 +314,17 @@ class CompareDatabase:
     def _create_table_from_data(self, table_name: str, records: List[Dict]) -> set:
         """
         Dynamically create a table based on all fields found in records.
-        Returns set of all column names.
+
+        Scans all records to find all unique field names, then creates
+        a table with columns for each field. All columns are TEXT type
+        for flexibility.
+
+        Args:
+            table_name: Name of the table to create
+            records: List of dictionaries to analyze
+
+        Returns:
+            Set of all column names created
         """
         # Collect all unique keys from all records
         all_keys = set()
