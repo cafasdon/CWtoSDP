@@ -577,7 +577,14 @@ class SyncGUI:
         self.category_filter.set("All")
 
     def _populate_tree(self, items=None):
-        """Populate the tree view with ALL fields and selection checkbox."""
+        """
+        Populate the tree view with ALL fields and selection checkbox.
+
+        For UPDATE items, field values are annotated to show what's changing:
+        - ★ prefix = NEW field (doesn't exist in SDP)
+        - ↻ prefix = CHANGED field (different from SDP)
+        - (no prefix) = UNCHANGED field (same as SDP)
+        """
         self.tree.delete(*self.tree.get_children())
 
         items = items or self.items
@@ -592,6 +599,15 @@ class SyncGUI:
                 tag = item.action.value
 
             fields = item.fields_to_sync
+
+            # For UPDATE items, get field change status and annotate values
+            if item.action == SyncAction.UPDATE:
+                changes = item.get_field_changes()
+                display_fields = self._format_fields_with_changes(fields, changes)
+            else:
+                # CREATE items - all fields are new (show with ★)
+                display_fields = {k: f"★ {v}" if v else "" for k, v in fields.items()}
+
             self.tree.insert("", tk.END, iid=item.cw_name, values=(
                 check_mark,
                 item.cw_name,
@@ -599,16 +615,46 @@ class SyncGUI:
                 item.action.value.upper(),
                 item.sdp_ci_type,
                 item.match_reason or "-",
-                # SDP fields
-                fields.get("name", ""),
-                fields.get("ci_attributes_txt_serial_number", ""),
-                fields.get("ci_attributes_txt_os", ""),
-                fields.get("ci_attributes_txt_manufacturer", ""),
-                fields.get("ci_attributes_txt_ip_address", ""),
-                fields.get("ci_attributes_txt_mac_address", ""),
+                # SDP fields with change indicators
+                display_fields.get("name", ""),
+                display_fields.get("ci_attributes_txt_serial_number", ""),
+                display_fields.get("ci_attributes_txt_os", ""),
+                display_fields.get("ci_attributes_txt_manufacturer", ""),
+                display_fields.get("ci_attributes_txt_ip_address", ""),
+                display_fields.get("ci_attributes_txt_mac_address", ""),
             ), tags=(tag,))
 
         self._update_selection_label()
+
+    def _format_fields_with_changes(self, fields: dict, changes: dict) -> dict:
+        """
+        Format field values with change indicators for UPDATE items.
+
+        Args:
+            fields: Dictionary of field names to new values (from CW)
+            changes: Dictionary of field names to change types (new/changed/unchanged)
+
+        Returns:
+            Dictionary with formatted display values:
+            - ★ value = NEW (field will be added to SDP)
+            - ↻ value = CHANGED (field will be updated in SDP)
+            - value = UNCHANGED (same value, no change)
+        """
+        display = {}
+        for field_name, value in fields.items():
+            if not value:
+                display[field_name] = ""
+                continue
+
+            change_type = changes.get(field_name, "unchanged")
+            if change_type == "new":
+                display[field_name] = f"★ {value}"  # Star = new field
+            elif change_type == "changed":
+                display[field_name] = f"↻ {value}"  # Cycle = changed field
+            else:
+                display[field_name] = str(value)  # No prefix = unchanged
+
+        return display
 
     def _populate_category_tab(self):
         """Populate category breakdown as proper GUI."""
@@ -749,7 +795,8 @@ class SyncGUI:
         Refresh a single item's display in the tree.
 
         Updates the checkbox character and row color based on
-        whether the item is selected or not.
+        whether the item is selected or not. Also maintains
+        field change indicators for UPDATE items.
 
         Args:
             item_id: The CW device name (used as tree item ID)
@@ -763,6 +810,14 @@ class SyncGUI:
         tag = f"selected_{item.action.value}" if is_selected else item.action.value
 
         fields = item.fields_to_sync
+
+        # Format fields with change indicators (same logic as _populate_tree)
+        if item.action == SyncAction.UPDATE:
+            changes = item.get_field_changes()
+            display_fields = self._format_fields_with_changes(fields, changes)
+        else:
+            display_fields = {k: f"★ {v}" if v else "" for k, v in fields.items()}
+
         self.tree.item(item_id, values=(
             check_mark,
             item.cw_name,
@@ -770,12 +825,12 @@ class SyncGUI:
             item.action.value.upper(),
             item.sdp_ci_type,
             item.match_reason or "-",
-            fields.get("name", ""),
-            fields.get("ci_attributes_txt_serial_number", ""),
-            fields.get("ci_attributes_txt_os", ""),
-            fields.get("ci_attributes_txt_manufacturer", ""),
-            fields.get("ci_attributes_txt_ip_address", ""),
-            fields.get("ci_attributes_txt_mac_address", ""),
+            display_fields.get("name", ""),
+            display_fields.get("ci_attributes_txt_serial_number", ""),
+            display_fields.get("ci_attributes_txt_os", ""),
+            display_fields.get("ci_attributes_txt_manufacturer", ""),
+            display_fields.get("ci_attributes_txt_ip_address", ""),
+            display_fields.get("ci_attributes_txt_mac_address", ""),
         ), tags=(tag,))
 
     def _select_all(self):
