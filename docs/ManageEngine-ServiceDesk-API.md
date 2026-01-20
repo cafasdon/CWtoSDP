@@ -331,13 +331,15 @@ curl -X GET "https://sdpondemand.manageengine.eu/api/v3/cmdb/ci_workstation?list
 
 ---
 
-## 9. Current Credentials
+## 9. Credential Setup
+
+Store your credentials in `credentials.env` (copy from `credentials.env.template`):
 
 ```text
-Client ID:      1000.MRFPAUP5TT668XSZZKC85XCR9V58GW
-Client Secret:  b359c175f3f47d397b9721d8fc0b60d7071b1243a1
-Refresh Token:  1000.6889d091a0e47de19bad4654a80e3329.354767c5a7b7b7a03ee533ff1076342f
-API Domain:     https://sdpondemand.manageengine.eu
+Client ID:      YOUR_ZOHO_CLIENT_ID
+Client Secret:  YOUR_ZOHO_CLIENT_SECRET
+Refresh Token:  YOUR_ZOHO_REFRESH_TOKEN
+API Domain:     https://sdpondemand.manageengine.eu (or your region)
 Scopes:         SDPOnDemand.assets.ALL, SDPOnDemand.cmdb.ALL, SDPOnDemand.requests.READ
 ```
 
@@ -345,8 +347,10 @@ Scopes:         SDPOnDemand.assets.ALL, SDPOnDemand.cmdb.ALL, SDPOnDemand.reques
 
 ```bash
 curl -X POST "https://accounts.zoho.eu/oauth/v2/token" \
-  -d "refresh_token=1000.6889d091a0e47de19bad4654a80e3329.354767c5a7b7b7a03ee533ff1076342f" \
+  -d "refresh_token=YOUR_REFRESH_TOKEN" \
   -d "grant_type=refresh_token" \
-  -d "client_id=1000.MRFPAUP5TT668XSZZKC85XCR9V58GW" \
-  -d "client_secret=b359c175f3f47d397b9721d8fc0b60d7071b1243a1"
+  -d "client_id=YOUR_CLIENT_ID" \
+  -d "client_secret=YOUR_CLIENT_SECRET"
 ```
+
+> **Note**: Get your credentials from the [Zoho API Console](https://api-console.zoho.com/)
