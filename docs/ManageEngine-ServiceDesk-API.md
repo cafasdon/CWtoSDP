@@ -227,6 +227,51 @@ https://sdpondemand.manageengine.eu/api/v3/
 | `ref_managed_by`      | object | Manager reference                           |
 | `ref_business_impact` | object | Business impact level                       |
 
+#### Field Naming Conventions & Validation
+
+CI attribute field names follow a prefix convention that indicates their type:
+
+| Prefix  | Type    | Description                          | Example               |
+| ------- | ------- | ------------------------------------ | --------------------- |
+| `txt_`  | Text    | Free-form text field (string)        | `txt_serial_number`   |
+| `num_`  | Numeric | Integer or decimal number            | `num_processor_count` |
+| `date_` | Date    | Date/datetime value                  | `date_purchase_date`  |
+| `ref_`  | Lookup  | Reference to another entity (object) | `ref_owned_by`        |
+| `bool_` | Boolean | True/false value                     | `bool_is_active`      |
+
+**Field Limits:**
+
+| Field Type        | Character Limit | Notes                                 |
+| ----------------- | --------------- | ------------------------------------- |
+| Text (single)     | 250 chars       | Standard single-line text fields      |
+| Text (multi-line) | 3,500 chars     | Additional field multi-line limit     |
+| Picklist values   | 50 chars        | Values in dropdown/picklist fields    |
+| Name field        | 250 chars       | CI name must be unique within CI type |
+
+**Lookup Fields (ref\_):**
+
+Lookup fields require an object with either `id` or `name`:
+
+```json
+{
+  "ref_owned_by": {
+    "name": "John Smith"
+  }
+}
+```
+
+or
+
+```json
+{
+  "ref_owned_by": {
+    "id": "11873000000123456"
+  }
+}
+```
+
+**Important:** The referenced entity must already exist in SDP. Invalid references will cause error 4001.
+
 ---
 
 ## 6. CRUD Operations
