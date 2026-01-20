@@ -120,7 +120,7 @@ class SyncGUI:
         self._create_mapping_tab()
 
     def _create_summary_section(self, parent):
-        """Create summary cards at top with sync button."""
+        """Create summary cards at top with sync button and controls."""
         summary_frame = ttk.Frame(parent)
         summary_frame.pack(fill=tk.X, pady=(0, 10))
 
@@ -128,17 +128,53 @@ class SyncGUI:
         ttk.Label(summary_frame, text="CW → SDP Sync Manager",
                   font=("Segoe UI", 16, "bold")).pack(side=tk.LEFT)
 
-        # Sync button (right side)
-        btn_frame = ttk.Frame(summary_frame)
-        btn_frame.pack(side=tk.RIGHT)
+        # Right side controls frame
+        controls_frame = ttk.Frame(summary_frame)
+        controls_frame.pack(side=tk.RIGHT)
 
-        self.sync_btn = ttk.Button(btn_frame, text="🔄 Sync to SDP (Create Only)",
+        # Row 1: Sync controls
+        sync_row = ttk.Frame(controls_frame)
+        sync_row.pack(fill=tk.X, pady=2)
+
+        # Dry run checkbox (checked by default = dry run mode)
+        self.real_sync_var = tk.BooleanVar(value=False)
+        self.real_sync_check = ttk.Checkbutton(
+            sync_row, text="Enable Real Sync", variable=self.real_sync_var,
+            command=self._on_real_sync_toggle
+        )
+        self.real_sync_check.pack(side=tk.LEFT, padx=5)
+
+        # Sync button (dry run by default)
+        self.sync_btn = ttk.Button(sync_row, text="🔍 Preview Sync (Dry Run)",
                                    command=self._execute_sync)
-        self.sync_btn.pack(side=tk.RIGHT, padx=10)
+        self.sync_btn.pack(side=tk.LEFT, padx=5)
+
+        # Revert button
+        self.revert_btn = ttk.Button(sync_row, text="↩️ Revert Last Sync",
+                                     command=self._revert_sync, state=tk.DISABLED)
+        self.revert_btn.pack(side=tk.LEFT, padx=5)
+
+        # Row 2: Data refresh controls
+        refresh_row = ttk.Frame(controls_frame)
+        refresh_row.pack(fill=tk.X, pady=2)
+
+        ttk.Button(refresh_row, text="🔄 Refresh CW Data",
+                   command=self._refresh_cw_data).pack(side=tk.LEFT, padx=5)
+        ttk.Button(refresh_row, text="🔄 Refresh SDP Data",
+                   command=self._refresh_sdp_data).pack(side=tk.LEFT, padx=5)
+        ttk.Button(refresh_row, text="🔍 Check Orphans",
+                   command=self._check_orphans).pack(side=tk.LEFT, padx=5)
 
         # Stats will be added after data loads
         self.stats_frame = ttk.Frame(summary_frame)
         self.stats_frame.pack(side=tk.RIGHT, padx=20)
+
+    def _on_real_sync_toggle(self):
+        """Update sync button text based on real sync checkbox."""
+        if self.real_sync_var.get():
+            self.sync_btn.config(text="⚠️ Execute Real Sync")
+        else:
+            self.sync_btn.config(text="🔍 Preview Sync (Dry Run)")
 
     def _create_preview_tab(self):
         """Create the sync preview tab with ALL fields visible."""
@@ -471,10 +507,12 @@ class SyncGUI:
             pass
 
     def _execute_sync(self):
-        """Execute sync: CREATE only (no overwrites)."""
+        """Execute sync: CREATE only (no overwrites). Dry run by default."""
         if self.sync_in_progress:
             messagebox.showwarning("Sync in Progress", "A sync operation is already running.")
             return
+
+        is_dry_run = not self.real_sync_var.get()
 
         # Count items to create
         create_items = [i for i in self.items if i.action == SyncAction.CREATE]
@@ -482,40 +520,50 @@ class SyncGUI:
             messagebox.showinfo("Nothing to Create", "All CW devices already exist in SDP. Nothing to create.")
             return
 
-        # Confirm with user
-        msg = f"This will CREATE {len(create_items)} new assets in SDP.\n\n"
+        # Build confirmation message
+        mode_text = "DRY RUN (preview only)" if is_dry_run else "REAL SYNC"
+        msg = f"Mode: {mode_text}\n\n"
+        msg += f"This will CREATE {len(create_items)} new assets in SDP.\n\n"
         msg += "By Category:\n"
         for cat in sorted(set(i.cw_category for i in create_items)):
             count = len([i for i in create_items if i.cw_category == cat])
             msg += f"  • {cat}: {count}\n"
-        msg += "\nExisting matches will be SKIPPED (no overwrites).\n\nProceed?"
+        msg += "\nExisting matches will be SKIPPED (no overwrites).\n"
+
+        if not is_dry_run:
+            msg += "\n⚠️ WARNING: This will make REAL changes to SDP!\n"
+
+        msg += "\nProceed?"
 
         if not messagebox.askyesno("Confirm Sync", msg):
             return
 
         # Start sync in background thread
         self.sync_in_progress = True
+        original_text = self.sync_btn.cget("text")
         self.sync_btn.config(state=tk.DISABLED, text="⏳ Syncing...")
 
         # Create progress window
-        self._create_progress_window(len(create_items))
+        self._create_progress_window(len(create_items), is_dry_run)
 
         # Run sync in thread
-        thread = threading.Thread(target=self._run_sync_thread, args=(create_items,))
+        thread = threading.Thread(target=self._run_sync_thread, args=(create_items, is_dry_run))
         thread.daemon = True
         thread.start()
 
-    def _create_progress_window(self, total: int):
+    def _create_progress_window(self, total: int, is_dry_run: bool):
         """Create progress window for sync."""
         self.progress_win = tk.Toplevel(self.root)
-        self.progress_win.title("Sync Progress")
-        self.progress_win.geometry("500x300")
+        title = "Sync Preview (Dry Run)" if is_dry_run else "Sync Progress"
+        self.progress_win.title(title)
+        self.progress_win.geometry("600x400")
         self.progress_win.transient(self.root)
 
-        ttk.Label(self.progress_win, text="Creating assets in SDP...",
+        header = "Preview: What would be created..." if is_dry_run else "Creating assets in SDP..."
+        ttk.Label(self.progress_win, text=header,
                   font=("Segoe UI", 12, "bold")).pack(pady=10)
 
-        self.progress_bar = ttk.Progressbar(self.progress_win, length=400, mode="determinate",
+        self.progress_bar = ttk.Progressbar(self.progress_win, length=500, mode="determinate",
                                              maximum=total)
         self.progress_bar.pack(pady=10)
 
@@ -523,15 +571,17 @@ class SyncGUI:
         self.progress_label.pack()
 
         # Log area
-        self.progress_log = tk.Text(self.progress_win, height=10, width=60, state=tk.DISABLED)
+        self.progress_log = tk.Text(self.progress_win, height=15, width=70, state=tk.DISABLED)
         self.progress_log.pack(pady=10, padx=10, fill=tk.BOTH, expand=True)
 
-    def _run_sync_thread(self, items: List[SyncItem]):
+    def _run_sync_thread(self, items: List[SyncItem], is_dry_run: bool):
         """Run sync in background thread."""
         from .sdp_client import SDPClient
 
+        created_ids = []  # Track created items for revert
+
         try:
-            sdp = SDPClient()
+            sdp = SDPClient(dry_run=is_dry_run)
         except Exception as e:
             self.root.after(0, lambda: self._sync_error(f"Failed to connect to SDP: {e}"))
             return
@@ -545,7 +595,18 @@ class SyncGUI:
                 result = sdp.create_ci(item.sdp_ci_type, item.fields_to_sync)
                 if result:
                     success_count += 1
-                    log_msg = f"✓ Created: {item.cw_name}"
+                    if is_dry_run:
+                        log_msg = f"[DRY] Would create: {item.cw_name} → {item.sdp_ci_type}"
+                    else:
+                        log_msg = f"✓ Created: {item.cw_name}"
+                        # Track for revert
+                        sdp_id = result.get(item.sdp_ci_type, {}).get("id")
+                        if sdp_id:
+                            created_ids.append({
+                                "sdp_id": sdp_id,
+                                "ci_type": item.sdp_ci_type,
+                                "name": item.cw_name
+                            })
                 else:
                     error_count += 1
                     log_msg = f"✗ Failed: {item.cw_name}"
@@ -556,8 +617,41 @@ class SyncGUI:
             # Update UI in main thread
             self.root.after(0, lambda i=i, msg=log_msg: self._update_progress(i + 1, len(items), msg))
 
+        # Save created IDs for revert (if real sync)
+        if not is_dry_run and created_ids:
+            self._save_sync_log(created_ids)
+
         # Done
-        self.root.after(0, lambda: self._sync_complete(success_count, error_count))
+        self.root.after(0, lambda: self._sync_complete(success_count, error_count, is_dry_run))
+
+    def _save_sync_log(self, created_ids: List[Dict]):
+        """Save sync log to database for revert capability."""
+        import sqlite3
+        import json
+        from datetime import datetime
+
+        conn = sqlite3.connect("data/cwtosdp_compare.db")
+        cursor = conn.cursor()
+
+        # Create sync_log table if not exists
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sync_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sync_time TEXT,
+                items_json TEXT,
+                reverted INTEGER DEFAULT 0
+            )
+        """)
+
+        cursor.execute(
+            "INSERT INTO sync_log (sync_time, items_json) VALUES (?, ?)",
+            (datetime.now().isoformat(), json.dumps(created_ids))
+        )
+        conn.commit()
+        conn.close()
+
+        # Enable revert button
+        self.root.after(0, lambda: self.revert_btn.config(state=tk.NORMAL))
 
     def _update_progress(self, current: int, total: int, log_msg: str):
         """Update progress UI."""
@@ -572,25 +666,227 @@ class SyncGUI:
     def _sync_error(self, msg: str):
         """Handle sync error."""
         self.sync_in_progress = False
-        self.sync_btn.config(state=tk.NORMAL, text="🔄 Sync to SDP (Create Only)")
+        self._on_real_sync_toggle()  # Reset button text
         if hasattr(self, 'progress_win'):
             self.progress_win.destroy()
         messagebox.showerror("Sync Error", msg)
 
-    def _sync_complete(self, success: int, errors: int):
+    def _sync_complete(self, success: int, errors: int, is_dry_run: bool):
         """Handle sync completion."""
         self.sync_in_progress = False
-        self.sync_btn.config(state=tk.NORMAL, text="🔄 Sync to SDP (Create Only)")
+        self._on_real_sync_toggle()  # Reset button text
 
         # Update progress window with summary
-        self.progress_label.config(text=f"Complete: {success} created, {errors} errors")
+        if is_dry_run:
+            self.progress_label.config(text=f"Preview complete: {success} would be created, {errors} would fail")
+        else:
+            self.progress_label.config(text=f"Complete: {success} created, {errors} errors")
 
         # Add close button
         ttk.Button(self.progress_win, text="Close",
                    command=self.progress_win.destroy).pack(pady=10)
 
-        # Reload data to reflect changes
+        # Reload data to reflect changes (only if real sync)
+        if not is_dry_run:
+            self._load_data()
+
+    def _revert_sync(self):
+        """Revert the last sync operation."""
+        import sqlite3
+        import json
+
+        # Get last sync log
+        conn = sqlite3.connect("data/cwtosdp_compare.db")
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT id, sync_time, items_json FROM sync_log
+            WHERE reverted = 0 ORDER BY id DESC LIMIT 1
+        """)
+        row = cursor.fetchone()
+
+        if not row:
+            messagebox.showinfo("No Sync to Revert", "No previous sync operations found to revert.")
+            conn.close()
+            return
+
+        log_id, sync_time, items_json = row
+        items = json.loads(items_json)
+
+        msg = f"Revert sync from {sync_time}?\n\n"
+        msg += f"This will DELETE {len(items)} items from SDP:\n"
+        for item in items[:5]:
+            msg += f"  • {item['name']}\n"
+        if len(items) > 5:
+            msg += f"  ... and {len(items) - 5} more\n"
+
+        if not messagebox.askyesno("Confirm Revert", msg):
+            conn.close()
+            return
+
+        # Execute revert
+        from .sdp_client import SDPClient
+        try:
+            sdp = SDPClient(dry_run=False)
+            success = 0
+            for item in items:
+                try:
+                    sdp.delete_ci(item['ci_type'], item['sdp_id'])
+                    success += 1
+                except Exception as e:
+                    logger.error(f"Failed to delete {item['name']}: {e}")
+
+            # Mark as reverted
+            cursor.execute("UPDATE sync_log SET reverted = 1 WHERE id = ?", (log_id,))
+            conn.commit()
+
+            messagebox.showinfo("Revert Complete", f"Deleted {success}/{len(items)} items from SDP.")
+            self.revert_btn.config(state=tk.DISABLED)
+            self._load_data()
+
+        except Exception as e:
+            messagebox.showerror("Revert Error", f"Failed to revert: {e}")
+        finally:
+            conn.close()
+
+    def _refresh_cw_data(self):
+        """Refresh ConnectWise data."""
+        if messagebox.askyesno("Refresh CW Data",
+                               "This will re-fetch all data from ConnectWise.\nThis may take a few minutes.\n\nProceed?"):
+            self.sync_btn.config(state=tk.DISABLED)
+            thread = threading.Thread(target=self._do_refresh_cw)
+            thread.daemon = True
+            thread.start()
+
+    def _do_refresh_cw(self):
+        """Background thread for CW refresh."""
+        try:
+            from .db_compare import ComparisonDatabase
+            db = ComparisonDatabase()
+            db.fetch_cw_devices_full()
+            db.close()
+            self.root.after(0, lambda: self._refresh_complete("ConnectWise"))
+        except Exception as e:
+            self.root.after(0, lambda: messagebox.showerror("Error", f"CW refresh failed: {e}"))
+            self.root.after(0, lambda: self.sync_btn.config(state=tk.NORMAL))
+
+    def _refresh_sdp_data(self):
+        """Refresh ServiceDesk Plus data."""
+        if messagebox.askyesno("Refresh SDP Data",
+                               "This will re-fetch all data from ServiceDesk Plus.\nThis may take a few minutes.\n\nProceed?"):
+            self.sync_btn.config(state=tk.DISABLED)
+            thread = threading.Thread(target=self._do_refresh_sdp)
+            thread.daemon = True
+            thread.start()
+
+    def _do_refresh_sdp(self):
+        """Background thread for SDP refresh."""
+        try:
+            from .db_compare import ComparisonDatabase
+            db = ComparisonDatabase()
+            db.fetch_sdp_workstations_full()
+            db.close()
+            self.root.after(0, lambda: self._refresh_complete("ServiceDesk Plus"))
+        except Exception as e:
+            self.root.after(0, lambda: messagebox.showerror("Error", f"SDP refresh failed: {e}"))
+            self.root.after(0, lambda: self.sync_btn.config(state=tk.NORMAL))
+
+    def _refresh_complete(self, source: str):
+        """Handle refresh completion."""
+        self.sync_btn.config(state=tk.NORMAL)
+        messagebox.showinfo("Refresh Complete", f"{source} data refreshed successfully.")
         self._load_data()
+
+    def _check_orphans(self):
+        """Check for orphaned entries and database status."""
+        import sqlite3
+
+        conn = sqlite3.connect("data/cwtosdp_compare.db")
+        cursor = conn.cursor()
+
+        # Get counts
+        cursor.execute("SELECT COUNT(*) FROM cw_devices_full")
+        cw_count = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM sdp_workstations_full")
+        sdp_count = cursor.fetchone()[0]
+
+        # Check for sync log entries
+        pending_syncs = 0
+        try:
+            cursor.execute("SELECT COUNT(*) FROM sync_log WHERE reverted = 0")
+            result = cursor.fetchone()
+            pending_syncs = result[0] if result else 0
+        except sqlite3.OperationalError:
+            pass  # Table doesn't exist yet
+
+        # Check fetch tracker
+        fetch_info = []
+        try:
+            cursor.execute("SELECT source, last_fetch, total_fetched FROM fetch_tracker")
+            fetch_info = cursor.fetchall()
+        except sqlite3.OperationalError:
+            pass  # Table doesn't exist yet
+
+        # Check for orphaned CW entries (not in current API response)
+        # This would require comparing with a fresh API call - for now show what we have
+
+        # Check matches vs creates
+        create_count = len([i for i in self.items if i.action == SyncAction.CREATE])
+        update_count = len([i for i in self.items if i.action == SyncAction.UPDATE])
+
+        conn.close()
+
+        # Show results in popup
+        win = tk.Toplevel(self.root)
+        win.title("Database Status & Orphan Check")
+        win.geometry("550x500")
+        win.transient(self.root)
+
+        ttk.Label(win, text="Database Status", font=("Segoe UI", 14, "bold")).pack(pady=10)
+
+        info_frame = ttk.Frame(win, padding=20)
+        info_frame.pack(fill=tk.BOTH, expand=True)
+
+        info = f"""
+DATABASE RECORDS:
+─────────────────────────────────────────
+  • ConnectWise devices: {cw_count}
+  • ServiceDesk Plus workstations: {sdp_count}
+
+SYNC ANALYSIS:
+─────────────────────────────────────────
+  • Devices matching (UPDATE): {update_count}
+  • Devices to create (CREATE): {create_count}
+  • Pending (un-reverted) syncs: {pending_syncs}
+
+LAST FETCH TIMES:
+─────────────────────────────────────────
+"""
+        if fetch_info:
+            for source, last_fetch, total in fetch_info:
+                info += f"  • {source}: {last_fetch}\n    ({total} records fetched)\n"
+        else:
+            info += "  No fetch records found.\n"
+
+        info += f"""
+ORPHAN CHECK:
+─────────────────────────────────────────
+  To identify orphaned entries (records in DB that
+  no longer exist in source systems), use the
+  "Refresh CW Data" or "Refresh SDP Data" buttons
+  to re-fetch current data.
+
+  After refresh, records not in the new API response
+  will be automatically replaced.
+"""
+
+        text = tk.Text(info_frame, wrap=tk.WORD, font=("Consolas", 10))
+        text.insert(tk.END, info)
+        text.config(state=tk.DISABLED)
+        text.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Button(win, text="Close", command=win.destroy).pack(pady=10)
 
     def run(self):
         """Run the application."""

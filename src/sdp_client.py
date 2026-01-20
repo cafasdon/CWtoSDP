@@ -325,6 +325,31 @@ class ServiceDeskPlusClient:
             logger.error(f"Failed to create {ci_type}: {e}")
             return None
 
+    def delete_ci(self, ci_type: str, ci_id: str) -> bool:
+        """
+        Delete a CI (Configuration Item) from CMDB.
+
+        Args:
+            ci_type: The CI type (e.g., 'ci_windows_workstation')
+            ci_id: The CI ID to delete
+
+        Returns:
+            True if deleted successfully, False otherwise.
+        """
+        if self.dry_run:
+            logger.info(f"[DRY RUN] Would delete {ci_type}/{ci_id}")
+            return True
+
+        endpoint = f"/cmdb/{ci_type}/{ci_id}"
+
+        try:
+            self._make_request("DELETE", endpoint)
+            logger.info(f"Deleted {ci_type}/{ci_id}")
+            return True
+        except ServiceDeskPlusClientError as e:
+            logger.error(f"Failed to delete {ci_type}/{ci_id}: {e}")
+            return False
+
 
 # Convenience wrapper for sync operations
 class SDPClient(ServiceDeskPlusClient):
