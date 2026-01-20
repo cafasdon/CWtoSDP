@@ -1827,10 +1827,13 @@ class HelpDialog:
         # Tab 1: Getting Started
         self._create_getting_started_tab(notebook)
 
-        # Tab 2: Automation Setup
+        # Tab 2: How It Works (NEW - Legend, behavior, etc.)
+        self._create_how_it_works_tab(notebook)
+
+        # Tab 3: Automation Setup
         self._create_automation_tab(notebook)
 
-        # Tab 3: Troubleshooting
+        # Tab 4: Troubleshooting
         self._create_troubleshooting_tab(notebook)
 
         # Close button
@@ -1878,6 +1881,149 @@ DEVICE CLASSIFICATION:
 • Virtual Servers: VMware/Hyper-V VMs (detected by serial)
 • Physical Servers: Real hardware servers
 • Network Devices: Switches, routers, firewalls
+"""
+        text.insert("1.0", content)
+        text.config(state=tk.DISABLED)
+
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+    def _create_how_it_works_tab(self, notebook):
+        """Create the How It Works tab with legend and behavior info."""
+        frame = ttk.Frame(notebook, padding="10")
+        notebook.add(frame, text="How It Works")
+
+        text = tk.Text(frame, wrap=tk.WORD, font=("Consolas", 10))
+        scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=text.yview)
+        text.configure(yscrollcommand=scrollbar.set)
+
+        content = """HOW CWtoSDP WORKS
+=================
+
+This tool syncs device data from ConnectWise RMM to ServiceDesk Plus CMDB.
+
+═══════════════════════════════════════════════════════════
+WHAT THE PROGRAM DOES
+═══════════════════════════════════════════════════════════
+
+1. FETCH DATA
+   • Connects to ConnectWise RMM API → fetches all endpoints
+   • Connects to ServiceDesk Plus API → fetches existing CMDB CIs
+   • Stores data locally in SQLite database for comparison
+
+2. CLASSIFY DEVICES
+   • Analyzes each CW device (model, serial, etc.)
+   • Assigns category: Laptop, Desktop, Virtual Server,
+     Physical Server, or Network Device
+   • Maps to appropriate SDP CI type
+
+3. MATCH & COMPARE
+   • Tries to match CW devices to existing SDP records
+   • Match by hostname (primary) or serial number (secondary)
+   • Compares field values to detect changes
+
+4. SYNC TO SDP
+   • CREATE: New devices not in SDP → creates new CI
+   • UPDATE: Matched devices with changes → updates CI fields
+
+═══════════════════════════════════════════════════════════
+PREVIEW LEGEND - ROW COLORS
+═══════════════════════════════════════════════════════════
+
+  🟢 GREEN ROWS = CREATE (New Items)
+     Device not found in SDP, will be created as new CI
+
+  🔵 BLUE ROWS = UPDATE (Existing Items)
+     Device matched to existing SDP CI, will update fields
+
+  ☑ = Selected for sync
+  ☐ = Not selected (will be skipped)
+
+═══════════════════════════════════════════════════════════
+PREVIEW LEGEND - FIELD INDICATORS
+═══════════════════════════════════════════════════════════
+
+For each field in the preview, indicators show what will happen:
+
+  ★ value           = NEW FIELD
+                      Empty in SDP, this value will be added
+                      Example: ★ 192.168.1.50
+
+  old → new         = CHANGED FIELD
+                      Different value in SDP, will be updated
+                      Example: Win 10 Pro → Windows 11 Pro
+
+  value (no prefix) = UNCHANGED FIELD
+                      Same value in both systems, no change
+
+═══════════════════════════════════════════════════════════
+MATCHING LOGIC
+═══════════════════════════════════════════════════════════
+
+Devices are matched to SDP records in this order:
+
+1. HOSTNAME MATCH (Primary)
+   • CW "friendlyName" compared to SDP "name"
+   • Case-insensitive comparison
+   • Most reliable method
+
+2. SERIAL NUMBER MATCH (Secondary)
+   • Only if hostname doesn't match
+   • Excludes VMware UUIDs (virtual machines)
+   • Useful for renamed machines
+
+If no match found → CREATE action
+If match found → UPDATE action
+
+═══════════════════════════════════════════════════════════
+CI TYPE MAPPING
+═══════════════════════════════════════════════════════════
+
+  Category          → SDP CI Type
+  ─────────────────────────────────────────────────────────
+  Laptop            → ci_windows_workstation
+  Desktop           → ci_windows_workstation
+  Virtual Server    → ci_virtual_machine
+  Physical Server   → ci_windows_server
+  Network Device    → ci_switch
+
+═══════════════════════════════════════════════════════════
+FIELD MAPPING (ConnectWise → ServiceDesk Plus)
+═══════════════════════════════════════════════════════════
+
+  CW Field                → SDP CI Attribute
+  ─────────────────────────────────────────────────────────
+  friendlyName            → name
+  system.serialNumber     → ci_attributes.txt_serial_number
+  operatingSystem.name    → ci_attributes.txt_os
+  system.manufacturer     → ci_attributes.txt_manufacturer
+  addresses[0].ipAddress  → ci_attributes.txt_ip_address
+  addresses[0].macAddress → ci_attributes.txt_mac_address
+
+═══════════════════════════════════════════════════════════
+SELECTION BEHAVIOR
+═══════════════════════════════════════════════════════════
+
+• Single-click on any row toggles its selection
+• ✓ All / ✗ All: Select/deselect all items (including hidden)
+• ✓ Filtered / ✗ Filtered: Select/deselect only visible items
+• Use Action/Category filters to narrow down the list
+• Selections persist when filters change
+
+═══════════════════════════════════════════════════════════
+DRY RUN VS REAL SYNC
+═══════════════════════════════════════════════════════════
+
+DRY RUN (Default - Safe):
+  • Shows what WOULD happen
+  • No changes made to SDP
+  • Results show "would_create" or "would_update"
+
+REAL SYNC (☑ Enable Real Sync):
+  • Actually creates/updates CIs in SDP
+  • Requires confirmation dialog
+  • Results show "created" or "updated"
+  • Can be reverted with Revert button
 """
         text.insert("1.0", content)
         text.config(state=tk.DISABLED)

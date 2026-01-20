@@ -118,6 +118,84 @@ python -m src.main --fetch-cw --fetch-sdp --export
 
 ---
 
+## How It Works
+
+### Sync Process
+
+1. **Fetch Data** - Connects to both APIs and stores data in local SQLite database
+2. **Classify Devices** - Analyzes each device and assigns a category (Laptop, Server, etc.)
+3. **Match & Compare** - Finds existing SDP records by hostname or serial number
+4. **Sync to SDP** - Creates new CIs or updates existing ones based on matches
+
+### Matching Logic
+
+Devices are matched to existing SDP records in this order:
+
+| Priority | Method        | Description                                       |
+| -------- | ------------- | ------------------------------------------------- |
+| 1        | Hostname      | CW `friendlyName` = SDP `name` (case-insensitive) |
+| 2        | Serial Number | Only for non-VM devices (excludes VMware UUIDs)   |
+
+- **Match found** → UPDATE action (update existing CI fields)
+- **No match** → CREATE action (create new CI)
+
+### Preview Legend - Row Colors
+
+| Color    | Action | Meaning                                 |
+| -------- | ------ | --------------------------------------- |
+| 🟢 Green | CREATE | New device, will create new CI in SDP   |
+| 🔵 Blue  | UPDATE | Matched device, will update existing CI |
+
+### Preview Legend - Field Indicators
+
+For UPDATE items, each field shows what will happen:
+
+| Indicator   | Meaning                                         |
+| ----------- | ----------------------------------------------- |
+| `★ value`   | **NEW** - Field is empty in SDP, will be added  |
+| `old → new` | **CHANGED** - Different value, will be updated  |
+| `value`     | **UNCHANGED** - Same in both systems, no change |
+
+### Selection Behavior
+
+- **Single-click** on any row toggles its selection (☑/☐)
+- **✓ All / ✗ All** - Select/deselect ALL items (including filtered out)
+- **✓ Filtered / ✗ Filtered** - Select/deselect only currently visible items
+- Selections persist when filters change
+
+### Dry Run vs Real Sync
+
+| Mode      | Checkbox State | What Happens                        |
+| --------- | -------------- | ----------------------------------- |
+| Dry Run   | ☐ Unchecked    | Preview only, no changes to SDP     |
+| Real Sync | ☑ Checked      | Actually creates/updates CIs in SDP |
+
+---
+
+## Field Mapping
+
+### ConnectWise → ServiceDesk Plus
+
+| CW Field                  | SDP CI Attribute                  |
+| ------------------------- | --------------------------------- |
+| `friendlyName`            | `name`                            |
+| `system.serialNumber`     | `ci_attributes.txt_serial_number` |
+| `operatingSystem.name`    | `ci_attributes.txt_os`            |
+| `system.manufacturer`     | `ci_attributes.txt_manufacturer`  |
+| `addresses[0].ipAddress`  | `ci_attributes.txt_ip_address`    |
+| `addresses[0].macAddress` | `ci_attributes.txt_mac_address`   |
+
+### SDP Field Types & Limits
+
+| Prefix  | Type    | Character Limit | Example               |
+| ------- | ------- | --------------- | --------------------- |
+| `txt_`  | Text    | 250 chars       | `txt_serial_number`   |
+| `num_`  | Numeric | N/A             | `num_processor_count` |
+| `date_` | Date    | N/A             | `date_purchase_date`  |
+| `ref_`  | Lookup  | Must exist      | `ref_owned_by`        |
+
+---
+
 ## Automated Sync (Scheduled Tasks)
 
 The automation scripts allow you to run syncs without user interaction, perfect for scheduled tasks.
