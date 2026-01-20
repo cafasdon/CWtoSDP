@@ -1,0 +1,73 @@
+# CWtoSDP - Dual License
+
+**Copyright (c) 2025 DMH Stallard / cafasdon**
+
+This software is available under a **dual license** model:
+
+---
+
+## 1. Non-Commercial License (FREE)
+
+You may use, copy, modify, and distribute this software **free of charge** for:
+
+- ✅ Personal use
+- ✅ Educational and academic use
+- ✅ Internal business operations (not resold or offered as a service)
+- ✅ Non-profit organizations
+- ✅ Evaluation and testing purposes
+
+### Conditions:
+- You must include this license notice in all copies
+- You must not remove or alter any copyright notices
+- Attribution is required in any derivative works
+
+### No Warranty:
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+
+---
+
+## 2. Commercial License (PAID)
+
+A **Commercial License** is required if you:
+
+- 💰 Sell this software or derivatives
+- 💰 Include it in a commercial product or service
+- 💰 Offer it as a managed service or SaaS
+- 💰 Use it to provide paid IT services to clients
+- 💰 Bundle it with hardware or other software for sale
+
+### To Obtain a Commercial License:
+
+Contact: **[INSERT YOUR EMAIL HERE]**
+
+Commercial licenses include:
+- Permission for commercial use
+- Priority support options
+- Custom feature development (negotiable)
+
+---
+
+## Summary
+
+| Use Case | License Required |
+|----------|------------------|
+| Personal/home use | Free (Non-Commercial) |
+| Internal IT department | Free (Non-Commercial) |
+| MSP offering to clients | **Commercial License** |
+| Reselling as product | **Commercial License** |
+| Including in commercial software | **Commercial License** |
+| Educational institution | Free (Non-Commercial) |
+
+---
+
+## Third-Party Components
+
+This software uses the following open-source libraries:
+- requests (Apache 2.0)
+- pandas (BSD 3-Clause)
+- python-dotenv (BSD 3-Clause)
+
+These libraries retain their original licenses.
+
