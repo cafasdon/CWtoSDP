@@ -164,6 +164,8 @@ class SyncGUI:
                    command=self._refresh_sdp_data).pack(side=tk.LEFT, padx=5)
         ttk.Button(refresh_row, text="🔍 Check Orphans",
                    command=self._check_orphans).pack(side=tk.LEFT, padx=5)
+        ttk.Button(refresh_row, text="⚙️ Settings",
+                   command=self._open_settings).pack(side=tk.LEFT, padx=5)
 
         # Stats will be added after data loads
         self.stats_frame = ttk.Frame(summary_frame)
@@ -1149,10 +1151,272 @@ ORPHAN CHECK:
 
         ttk.Button(win, text="Close", command=win.destroy).pack(pady=10)
 
+    def _open_settings(self):
+        """Open the settings/credentials configuration dialog."""
+        SettingsDialog(self.root)
+
     def run(self):
         """Run the application."""
         self.root.mainloop()
         self.engine.close()
+
+
+class SettingsDialog:
+    """Dialog for configuring API credentials and settings."""
+
+    def __init__(self, parent):
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("Settings - API Credentials")
+        self.dialog.geometry("650x550")
+        self.dialog.resizable(False, False)
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+
+        # Center on parent
+        self.dialog.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() - 650) // 2
+        y = parent.winfo_y() + (parent.winfo_height() - 550) // 2
+        self.dialog.geometry(f"+{x}+{y}")
+
+        self._create_widgets()
+        self._load_credentials()
+
+    def _create_widgets(self):
+        """Create the settings form."""
+        main = ttk.Frame(self.dialog, padding="20")
+        main.pack(fill=tk.BOTH, expand=True)
+
+        # Title
+        ttk.Label(main, text="API Credentials Configuration",
+                  font=("Segoe UI", 14, "bold")).pack(anchor=tk.W)
+        ttk.Label(main, text="Configure your ConnectWise and ServiceDesk Plus API credentials.",
+                  foreground="gray").pack(anchor=tk.W, pady=(0, 15))
+
+        # Notebook for sections
+        notebook = ttk.Notebook(main)
+        notebook.pack(fill=tk.BOTH, expand=True)
+
+        # Tab 1: ConnectWise
+        cw_frame = ttk.Frame(notebook, padding="15")
+        notebook.add(cw_frame, text="ConnectWise RMM")
+        self._create_cw_fields(cw_frame)
+
+        # Tab 2: ServiceDesk Plus
+        sdp_frame = ttk.Frame(notebook, padding="15")
+        notebook.add(sdp_frame, text="ServiceDesk Plus")
+        self._create_sdp_fields(sdp_frame)
+
+        # Tab 3: API Endpoints
+        endpoints_frame = ttk.Frame(notebook, padding="15")
+        notebook.add(endpoints_frame, text="API Endpoints")
+        self._create_endpoint_fields(endpoints_frame)
+
+        # Buttons
+        btn_frame = ttk.Frame(main)
+        btn_frame.pack(fill=tk.X, pady=(15, 0))
+
+        ttk.Button(btn_frame, text="Test Connections",
+                   command=self._test_connections).pack(side=tk.LEFT)
+        ttk.Button(btn_frame, text="Cancel",
+                   command=self.dialog.destroy).pack(side=tk.RIGHT, padx=(5, 0))
+        ttk.Button(btn_frame, text="Save",
+                   command=self._save_credentials).pack(side=tk.RIGHT)
+
+    def _create_cw_fields(self, parent):
+        """Create ConnectWise credential fields."""
+        ttk.Label(parent, text="ConnectWise RMM API Credentials",
+                  font=("Segoe UI", 11, "bold")).grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 10))
+
+        ttk.Label(parent, text="Client ID:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.cw_client_id = ttk.Entry(parent, width=50)
+        self.cw_client_id.grid(row=1, column=1, sticky=tk.W, padx=(10, 0))
+
+        ttk.Label(parent, text="Client Secret:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        self.cw_client_secret = ttk.Entry(parent, width=50, show="•")
+        self.cw_client_secret.grid(row=2, column=1, sticky=tk.W, padx=(10, 0))
+
+        # Show/hide button
+        self.cw_show_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(parent, text="Show secret", variable=self.cw_show_var,
+                        command=lambda: self.cw_client_secret.config(
+                            show="" if self.cw_show_var.get() else "•"
+                        )).grid(row=3, column=1, sticky=tk.W, padx=(10, 0))
+
+        ttk.Label(parent, text="Get these from ConnectWise Control admin panel.",
+                  foreground="gray").grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(15, 0))
+
+    def _create_sdp_fields(self, parent):
+        """Create ServiceDesk Plus credential fields."""
+        ttk.Label(parent, text="Zoho OAuth 2.0 Credentials",
+                  font=("Segoe UI", 11, "bold")).grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 10))
+
+        ttk.Label(parent, text="Client ID:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.zoho_client_id = ttk.Entry(parent, width=50)
+        self.zoho_client_id.grid(row=1, column=1, sticky=tk.W, padx=(10, 0))
+
+        ttk.Label(parent, text="Client Secret:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        self.zoho_client_secret = ttk.Entry(parent, width=50, show="•")
+        self.zoho_client_secret.grid(row=2, column=1, sticky=tk.W, padx=(10, 0))
+
+        ttk.Label(parent, text="Refresh Token:").grid(row=3, column=0, sticky=tk.W, pady=5)
+        self.zoho_refresh_token = ttk.Entry(parent, width=50, show="•")
+        self.zoho_refresh_token.grid(row=3, column=1, sticky=tk.W, padx=(10, 0))
+
+        # Show/hide button
+        self.sdp_show_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(parent, text="Show secrets", variable=self.sdp_show_var,
+                        command=self._toggle_sdp_secrets).grid(row=4, column=1, sticky=tk.W, padx=(10, 0))
+
+        ttk.Label(parent, text="Get these from Zoho API Console: https://api-console.zoho.com/",
+                  foreground="gray").grid(row=5, column=0, columnspan=2, sticky=tk.W, pady=(15, 0))
+
+    def _toggle_sdp_secrets(self):
+        """Toggle visibility of SDP secrets."""
+        show = "" if self.sdp_show_var.get() else "•"
+        self.zoho_client_secret.config(show=show)
+        self.zoho_refresh_token.config(show=show)
+
+    def _create_endpoint_fields(self, parent):
+        """Create API endpoint fields."""
+        ttk.Label(parent, text="API Endpoints",
+                  font=("Segoe UI", 11, "bold")).grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 10))
+
+        ttk.Label(parent, text="Zoho Accounts URL:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.zoho_accounts_url = ttk.Entry(parent, width=50)
+        self.zoho_accounts_url.grid(row=1, column=1, sticky=tk.W, padx=(10, 0))
+
+        ttk.Label(parent, text="Zoho Token URL:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        self.zoho_token_url = ttk.Entry(parent, width=50)
+        self.zoho_token_url.grid(row=2, column=1, sticky=tk.W, padx=(10, 0))
+
+        ttk.Label(parent, text="SDP API Base URL:").grid(row=3, column=0, sticky=tk.W, pady=5)
+        self.sdp_api_url = ttk.Entry(parent, width=50)
+        self.sdp_api_url.grid(row=3, column=1, sticky=tk.W, padx=(10, 0))
+
+        ttk.Label(parent, text="Data Center Presets:",
+                  font=("Segoe UI", 10, "bold")).grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(20, 5))
+
+        preset_frame = ttk.Frame(parent)
+        preset_frame.grid(row=5, column=0, columnspan=2, sticky=tk.W)
+        ttk.Button(preset_frame, text="EU (Europe)", command=lambda: self._set_preset("EU")).pack(side=tk.LEFT, padx=2)
+        ttk.Button(preset_frame, text="US (United States)", command=lambda: self._set_preset("US")).pack(side=tk.LEFT, padx=2)
+        ttk.Button(preset_frame, text="IN (India)", command=lambda: self._set_preset("IN")).pack(side=tk.LEFT, padx=2)
+        ttk.Button(preset_frame, text="AU (Australia)", command=lambda: self._set_preset("AU")).pack(side=tk.LEFT, padx=2)
+
+    def _set_preset(self, region: str):
+        """Set endpoint URLs based on region preset."""
+        presets = {
+            "EU": {
+                "accounts": "https://accounts.zoho.eu",
+                "token": "https://accounts.zoho.eu/oauth/v2/token",
+                "sdp": "https://sdpondemand.manageengine.eu/api/v3"
+            },
+            "US": {
+                "accounts": "https://accounts.zoho.com",
+                "token": "https://accounts.zoho.com/oauth/v2/token",
+                "sdp": "https://sdpondemand.manageengine.com/api/v3"
+            },
+            "IN": {
+                "accounts": "https://accounts.zoho.in",
+                "token": "https://accounts.zoho.in/oauth/v2/token",
+                "sdp": "https://sdpondemand.manageengine.in/api/v3"
+            },
+            "AU": {
+                "accounts": "https://accounts.zoho.com.au",
+                "token": "https://accounts.zoho.com.au/oauth/v2/token",
+                "sdp": "https://sdpondemand.manageengine.com.au/api/v3"
+            }
+        }
+        if region in presets:
+            self.zoho_accounts_url.delete(0, tk.END)
+            self.zoho_accounts_url.insert(0, presets[region]["accounts"])
+            self.zoho_token_url.delete(0, tk.END)
+            self.zoho_token_url.insert(0, presets[region]["token"])
+            self.sdp_api_url.delete(0, tk.END)
+            self.sdp_api_url.insert(0, presets[region]["sdp"])
+
+    def _load_credentials(self):
+        """Load existing credentials from file."""
+        creds_file = Path("credentials.env")
+        if not creds_file.exists():
+            # Set default EU endpoints
+            self._set_preset("EU")
+            return
+
+        creds = {}
+        with open(creds_file, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, value = line.split("=", 1)
+                    creds[key.strip()] = value.strip()
+
+        # Populate fields
+        self.cw_client_id.insert(0, creds.get("CLIENT_ID", ""))
+        self.cw_client_secret.insert(0, creds.get("CLIENT_SECRET", ""))
+        self.zoho_client_id.insert(0, creds.get("ZOHO_CLIENT_ID", ""))
+        self.zoho_client_secret.insert(0, creds.get("ZOHO_CLIENT_SECRET", ""))
+        self.zoho_refresh_token.insert(0, creds.get("ZOHO_REFRESH_TOKEN", ""))
+        self.zoho_accounts_url.insert(0, creds.get("ZOHO_ACCOUNTS_URL", "https://accounts.zoho.eu"))
+        self.zoho_token_url.insert(0, creds.get("ZOHO_TOKEN_URL", "https://accounts.zoho.eu/oauth/v2/token"))
+        self.sdp_api_url.insert(0, creds.get("SDP_API_BASE_URL", "https://sdpondemand.manageengine.eu/api/v3"))
+
+    def _save_credentials(self):
+        """Save credentials to file."""
+        content = f"""# CWtoSDP API Credentials
+# Auto-generated by Settings dialog
+
+# ConnectWise RMM API Credentials
+CLIENT_ID={self.cw_client_id.get()}
+CLIENT_SECRET={self.cw_client_secret.get()}
+
+# Zoho OAuth 2.0 Credentials (ServiceDesk Plus)
+ZOHO_CLIENT_ID={self.zoho_client_id.get()}
+ZOHO_CLIENT_SECRET={self.zoho_client_secret.get()}
+ZOHO_REFRESH_TOKEN={self.zoho_refresh_token.get()}
+
+# API Endpoints
+ZOHO_ACCOUNTS_URL={self.zoho_accounts_url.get()}
+ZOHO_TOKEN_URL={self.zoho_token_url.get()}
+SDP_API_BASE_URL={self.sdp_api_url.get()}
+
+# Granted Scopes
+SCOPES=SDPOnDemand.assets.ALL,SDPOnDemand.cmdb.ALL,SDPOnDemand.requests.READ
+"""
+        with open("credentials.env", "w") as f:
+            f.write(content)
+
+        messagebox.showinfo("Settings Saved", "Credentials saved to credentials.env\n\nRestart the application for changes to take effect.")
+        self.dialog.destroy()
+
+    def _test_connections(self):
+        """Test API connections."""
+        results = []
+
+        # Test ConnectWise
+        try:
+            from .cw_client import ConnectWiseClient
+            from .config import load_config
+            config = load_config()
+            client = ConnectWiseClient(config)
+            client.authenticate()
+            results.append("✅ ConnectWise: Authentication successful")
+        except Exception as e:
+            results.append(f"❌ ConnectWise: {str(e)[:50]}")
+
+        # Test ServiceDesk Plus
+        try:
+            from .sdp_client import ServiceDeskPlusClient
+            from .config import load_sdp_config
+            config = load_sdp_config()
+            client = ServiceDeskPlusClient(config)
+            # Try to get a token
+            client._ensure_access_token()
+            results.append("✅ ServiceDesk Plus: Authentication successful")
+        except Exception as e:
+            results.append(f"❌ ServiceDesk Plus: {str(e)[:50]}")
+
+        messagebox.showinfo("Connection Test Results", "\n".join(results))
 
 
 def launch_sync_gui():
