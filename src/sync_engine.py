@@ -107,7 +107,8 @@ class SyncItem:
         action: The sync action to perform (CREATE, UPDATE, etc.)
         sdp_id: Matching SDP CI ID (if UPDATE action)
         sdp_name: Matching SDP CI name (if UPDATE action)
-        fields_to_sync: Dictionary of SDP field values to set
+        fields_to_sync: Dictionary of SDP field values to set (from CW)
+        sdp_existing_fields: Dictionary of current SDP field values (for UPDATE comparison)
         match_reason: Human-readable explanation of why matched/not matched
     """
     cw_id: str                                    # CW endpoint ID
@@ -117,8 +118,31 @@ class SyncItem:
     action: SyncAction                            # CREATE, UPDATE, etc.
     sdp_id: Optional[str] = None                  # Matching SDP ID (if any)
     sdp_name: Optional[str] = None                # Matching SDP name (if any)
-    fields_to_sync: Dict[str, Any] = field(default_factory=dict)  # Field values
+    fields_to_sync: Dict[str, Any] = field(default_factory=dict)  # New values from CW
+    sdp_existing_fields: Dict[str, Any] = field(default_factory=dict)  # Current SDP values
     match_reason: str = ""                        # Why matched/not matched
+
+    def get_field_changes(self) -> Dict[str, str]:
+        """
+        Compare fields_to_sync with sdp_existing_fields to determine changes.
+
+        Returns a dictionary mapping field names to change types:
+        - "new": Field doesn't exist in SDP, will be added
+        - "changed": Field exists in SDP but has different value
+        - "unchanged": Field exists in SDP with same value
+        """
+        changes = {}
+        for field_name, new_value in self.fields_to_sync.items():
+            if not new_value:  # Skip empty values
+                continue
+            existing_value = self.sdp_existing_fields.get(field_name)
+            if existing_value is None or existing_value == "":
+                changes[field_name] = "new"
+            elif str(existing_value).strip().upper() != str(new_value).strip().upper():
+                changes[field_name] = "changed"
+            else:
+                changes[field_name] = "unchanged"
+        return changes
 
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -136,6 +160,7 @@ class SyncItem:
             "sdp_id": self.sdp_id,
             "sdp_name": self.sdp_name,
             "fields_to_sync": self.fields_to_sync,
+            "sdp_existing_fields": self.sdp_existing_fields,
             "match_reason": self.match_reason,
         }
 
@@ -251,7 +276,8 @@ class SyncEngine:
 
             if match:
                 # Match found → UPDATE action
-                sdp_id, sdp_name, match_reason = match
+                # Unpack all 4 values: id, name, reason, and existing fields
+                sdp_id, sdp_name, match_reason, existing_fields = match
                 item = SyncItem(
                     cw_id=cw_id,
                     cw_name=device.get("friendlyName", ""),
@@ -261,10 +287,11 @@ class SyncEngine:
                     sdp_id=sdp_id,
                     sdp_name=sdp_name,
                     fields_to_sync=sdp_data,
+                    sdp_existing_fields=existing_fields,  # Store existing SDP values
                     match_reason=match_reason,
                 )
             else:
-                # No match → CREATE action
+                # No match → CREATE action (no existing fields)
                 item = SyncItem(
                     cw_id=cw_id,
                     cw_name=device.get("friendlyName", ""),
@@ -272,6 +299,7 @@ class SyncEngine:
                     sdp_ci_type=sdp_ci_type,
                     action=SyncAction.CREATE,
                     fields_to_sync=sdp_data,
+                    sdp_existing_fields={},  # Empty - nothing exists yet
                     match_reason="No match found",
                 )
 
@@ -283,7 +311,7 @@ class SyncEngine:
     # MATCHING LOGIC
     # =========================================================================
 
-    def _find_sdp_match(self, cw_device: Dict, sdp_ci_type: str) -> Optional[Tuple[str, str, str]]:
+    def _find_sdp_match(self, cw_device: Dict, sdp_ci_type: str) -> Optional[Tuple[str, str, str, Dict[str, Any]]]:
         """
         Find a matching SDP record for a ConnectWise device.
 
@@ -297,8 +325,10 @@ class SyncEngine:
                         be used to search different CI tables)
 
         Returns:
-            Tuple of (sdp_id, sdp_name, match_reason) if match found
+            Tuple of (sdp_id, sdp_name, match_reason, existing_fields) if match found
             None if no match found
+
+            existing_fields contains the current SDP values for comparison
         """
         cursor = self.conn.cursor()
 
@@ -311,12 +341,13 @@ class SyncEngine:
         # =====================================================================
         # Case-insensitive hostname match is the most reliable
         cursor.execute(
-            "SELECT sdp_id, name FROM sdp_workstations_full WHERE UPPER(name) = ?",
+            "SELECT * FROM sdp_workstations_full WHERE UPPER(name) = ?",
             (cw_name,)
         )
         row = cursor.fetchone()
         if row:
-            return (str(row["sdp_id"]), row["name"], f"Hostname match: {row['name']}")
+            existing_fields = self._extract_sdp_fields(row)
+            return (str(row["sdp_id"]), row["name"], f"Hostname match: {row['name']}", existing_fields)
 
         # =====================================================================
         # MATCH BY SERIAL NUMBER (Secondary method)
@@ -324,15 +355,37 @@ class SyncEngine:
         # Only try serial match if it's not a VM serial (VMware UUIDs)
         if cw_serial and "VMWARE" not in cw_serial:
             cursor.execute(
-                "SELECT sdp_id, name FROM sdp_workstations_full WHERE UPPER(ci_attributes_txt_serial_number) = ?",
+                "SELECT * FROM sdp_workstations_full WHERE UPPER(ci_attributes_txt_serial_number) = ?",
                 (cw_serial,)
             )
             row = cursor.fetchone()
             if row:
-                return (str(row["sdp_id"]), row["name"], f"Serial match: {cw_serial}")
+                existing_fields = self._extract_sdp_fields(row)
+                return (str(row["sdp_id"]), row["name"], f"Serial match: {cw_serial}", existing_fields)
 
         # No match found
         return None
+
+    def _extract_sdp_fields(self, row) -> Dict[str, Any]:
+        """
+        Extract relevant fields from an SDP database row for comparison.
+
+        Maps the database column names to the field names used in fields_to_sync.
+
+        Args:
+            row: SQLite row object from sdp_workstations_full table
+
+        Returns:
+            Dictionary of field names to values
+        """
+        return {
+            "name": row["name"] if "name" in row.keys() else None,
+            "ci_attributes_txt_serial_number": row["ci_attributes_txt_serial_number"] if "ci_attributes_txt_serial_number" in row.keys() else None,
+            "ci_attributes_txt_os": row["ci_attributes_txt_os"] if "ci_attributes_txt_os" in row.keys() else None,
+            "ci_attributes_txt_manufacturer": row["ci_attributes_txt_manufacturer"] if "ci_attributes_txt_manufacturer" in row.keys() else None,
+            "ci_attributes_txt_ip_address": row["ci_attributes_txt_ip_address"] if "ci_attributes_txt_ip_address" in row.keys() else None,
+            "ci_attributes_txt_mac_address": row["ci_attributes_txt_mac_address"] if "ci_attributes_txt_mac_address" in row.keys() else None,
+        }
 
     # =========================================================================
     # SUMMARY STATISTICS
