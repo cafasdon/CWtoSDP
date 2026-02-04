@@ -1,0 +1,3 @@
+# This file ensures the output/ directory exists in git
+# Export files will be stored here (excluded from git)
+

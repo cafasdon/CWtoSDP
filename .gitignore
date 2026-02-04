@@ -21,9 +21,14 @@ build/
 # Output files
 *.csv
 *.xlsx
-output/
-logs/
-data/
+
+# Data directories - keep structure, ignore contents
+output/*
+!output/.gitkeep
+logs/*
+!logs/.gitkeep
+data/*
+!data/.gitkeep
 
 # IDE
 .vscode/

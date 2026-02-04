@@ -1,54 +1,88 @@
 # CWtoSDP - ConnectWise to ServiceDesk Plus Integration
 
-## Project Overview
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/badge/license-Dual-green.svg)](LICENSE)
 
-Integration tool for syncing device/asset data between:
+Integration tool for syncing device/asset data between **ConnectWise RMM** and **ManageEngine ServiceDesk Plus Cloud** CMDB.
 
-- **ConnectWise RMM** → Source of truth for devices
-- **ManageEngine ServiceDesk Plus Cloud** (ITSM/CMDB) → Target for CMDB
+## 🚀 Quick Start
 
-For DMH Stallard, a UK-based legal firm.
+### Prerequisites
 
-## Features
+- **Python 3.8+** ([Download](https://www.python.org/downloads/))
+- **ConnectWise RMM** admin access for API keys
+- **ServiceDesk Plus Cloud** access for Zoho OAuth setup
 
-- ✅ **Sync Manager GUI** - Visual interface for previewing and executing syncs
-- ✅ **Dry Run Mode** - Preview changes before committing (enabled by default)
-- ✅ **Selective Sync** - Choose which items to sync
-- ✅ **Device Classification** - Auto-categorizes devices (Laptop, Server, VM, Network)
-- ✅ **Field Mapping** - Maps CW fields to SDP CMDB fields
-- ✅ **Revert Capability** - Undo last sync operation
-- ✅ **Settings GUI** - Configure API credentials without editing files
+### Installation
 
-## Quick Start
+**Windows:** Double-click `start.bat`
 
-### Option 1: One-Click Install (Recommended)
+**macOS:** Double-click `start.command`
 
-| Platform    | Installer                      | Launcher                           |
-| ----------- | ------------------------------ | ---------------------------------- |
-| **Windows** | Double-click `install.bat`     | Double-click `launch_sync.bat`     |
-| **macOS**   | Double-click `install.command` | Double-click `launch_sync.command` |
-| **Linux**   | Run `./install.sh`             | Run `./launch_sync.sh`             |
+**Linux:** Run `chmod +x start.sh && ./start.sh`
+
+The installer will automatically set up everything and launch the GUI.
+
+### First Time Setup
+
+1. Launch the app using the commands above
+2. Click **⚙️ Settings**
+3. Enter your API credentials (see [SETUP.md](SETUP.md) for how to get them)
+4. Click **Test Connections** → **Save**
+5. Click **🔄 CW** and **🔄 SDP** to fetch data
+6. Review the sync preview and execute when ready
+
+📖 **Need detailed instructions?** See the complete [Setup Guide](SETUP.md)
+
+---
+
+## ✨ Features
+
+| Feature | Description |
+|---------|-------------|
+| **Sync Manager GUI** | Visual interface for previewing and executing syncs |
+| **Dry Run Mode** | Preview changes before committing (enabled by default) |
+| **Selective Sync** | Choose which items to sync with checkboxes |
+| **Device Classification** | Auto-categorizes: Laptop, Desktop, Server, VM, Network |
+| **Field Mapping** | Maps CW fields to SDP CMDB attributes |
+| **Diff View** | Side-by-side comparison of CW vs SDP data |
+| **Full DB View** | See all records from both systems with match status |
+| **Revert Capability** | Undo last sync operation |
+| **Incremental Fetch** | Only downloads new/changed data |
+| **Rate Limiting** | Adaptive rate limiting prevents API throttling |
+| **Settings GUI** | Configure credentials without editing files |
+
+---
+
+## 📦 Installation Options
+
+### Option 1: One-Click Start (Recommended)
+
+| Platform | Command |
+|----------|---------|
+| **Windows** | Double-click `start.bat` |
+| **macOS** | Double-click `start.command` |
+| **Linux** | `./start.sh` |
 
 ### Option 2: Manual Install
 
 ```bash
-# 1. Create virtual environment
+# Clone repository
+git clone https://github.com/cafasdon/CWtoSDP.git
+cd CWtoSDP
+
+# Create and activate virtual environment
 python -m venv venv
+source venv/bin/activate  # or venv\Scripts\activate on Windows
 
-# 2. Activate it
-# Windows:
-venv\Scripts\activate
-# macOS/Linux:
-source venv/bin/activate
-
-# 3. Install dependencies
+# Install dependencies
 pip install -r requirements.txt
 
-# 4. Configure credentials (or use GUI Settings)
+# Configure credentials
 cp credentials.env.template credentials.env
 # Edit credentials.env with your API keys
 
-# 5. Launch Sync Manager
+# Launch
 python -m src.main --sync
 ```
 
