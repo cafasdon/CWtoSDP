@@ -1966,16 +1966,107 @@ class SyncGUI:
         messagebox.showerror("Error", f"CW refresh failed:\n{error}")
 
     def _refresh_sdp_data(self):
-        """Refresh ServiceDesk Plus data."""
+        """Refresh ServiceDesk Plus data with progress dialog."""
         if messagebox.askyesno("Refresh SDP Data",
-                               "This will re-fetch all data from ServiceDesk Plus.\nThis may take a few minutes.\n\nProceed?"):
+                               "This will re-fetch all data from ServiceDesk Plus.\n"
+                               "This may take several minutes.\n\n"
+                               "Proceed?"):
             self.sync_btn.config(state=tk.DISABLED)
+            self._sdp_client = None  # Will be set in thread
+            self._sdp_cancelled = False
+            self._create_sdp_progress_dialog()
             thread = threading.Thread(target=self._do_refresh_sdp)
             thread.daemon = True
             thread.start()
 
+    def _create_sdp_progress_dialog(self):
+        """Create progress dialog for SDP refresh with live feed."""
+        self.sdp_progress_win = tk.Toplevel(self.root)
+        self.sdp_progress_win.title("Refreshing ServiceDesk Plus Data")
+        self.sdp_progress_win.geometry("500x350")
+        self.sdp_progress_win.transient(self.root)
+        self.sdp_progress_win.protocol("WM_DELETE_WINDOW", self._cancel_sdp_refresh)
+
+        # Center on parent
+        self.sdp_progress_win.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - 500) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 350) // 2
+        self.sdp_progress_win.geometry(f"+{x}+{y}")
+
+        ttk.Label(self.sdp_progress_win, text="Fetching ServiceDesk Plus Workstations",
+                  font=("Segoe UI", 12, "bold")).pack(pady=(15, 10))
+
+        self.sdp_progress_bar = ttk.Progressbar(self.sdp_progress_win, length=450,
+                                                mode="determinate", maximum=100)
+        self.sdp_progress_bar.pack(pady=5)
+
+        self.sdp_progress_label = ttk.Label(self.sdp_progress_win, text="Connecting...")
+        self.sdp_progress_label.pack(pady=3)
+
+        self.sdp_status_label = ttk.Label(self.sdp_progress_win, text="", foreground="gray")
+        self.sdp_status_label.pack(pady=3)
+
+        # Live feed frame - shows recently fetched items
+        feed_frame = ttk.LabelFrame(self.sdp_progress_win, text="Recently Fetched", padding=5)
+        feed_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=5)
+
+        # Listbox for live feed (shows last N items)
+        self.sdp_feed_list = tk.Listbox(feed_frame, height=6, font=("Consolas", 9))
+        self.sdp_feed_list.pack(fill=tk.BOTH, expand=True)
+
+        # Initialize feed items list
+        self._sdp_feed_items = []
+
+        ttk.Button(self.sdp_progress_win, text="Cancel",
+                   command=self._cancel_sdp_refresh).pack(pady=10)
+
+    def _cancel_sdp_refresh(self):
+        """Cancel the SDP refresh operation."""
+        self._sdp_cancelled = True
+        if self._sdp_client:
+            self._sdp_client.cancel()
+        self.sdp_progress_label.config(text="Cancelling...")
+        logger.info("SDP refresh cancelled by user")
+
+    def _update_sdp_progress(self, current: int, total: int, status: str, detail: str = ""):
+        """Update SDP progress dialog from main thread."""
+        if hasattr(self, 'sdp_progress_win') and self.sdp_progress_win.winfo_exists():
+            pct = (current / total * 100) if total > 0 else 0
+            self.sdp_progress_bar["value"] = pct
+            self.sdp_progress_label.config(text=status)
+            self.sdp_status_label.config(text=detail)
+
+    def _add_to_sdp_feed(self, ws_name: str, ws_type: str):
+        """Add a fetched workstation to the live feed display."""
+        if hasattr(self, 'sdp_progress_win') and self.sdp_progress_win.winfo_exists():
+            # Format: "✓ WorkstationName (Type)"
+            entry = f"✓ {ws_name[:40]}{'...' if len(ws_name) > 40 else ''} ({ws_type})"
+
+            # Add to internal list
+            self._sdp_feed_items.append(entry)
+
+            # Keep only last 6 items
+            if len(self._sdp_feed_items) > 6:
+                self._sdp_feed_items = self._sdp_feed_items[-6:]
+
+            # Update listbox
+            self.sdp_feed_list.delete(0, tk.END)
+            for item in self._sdp_feed_items:
+                self.sdp_feed_list.insert(tk.END, item)
+
+            # Auto-scroll to bottom
+            self.sdp_feed_list.see(tk.END)
+
     def _do_refresh_sdp(self):
-        """Background thread for SDP refresh."""
+        """
+        Background thread for SDP refresh with progress updates.
+
+        Features:
+        - Shows progress dialog with live feed
+        - Supports cancellation
+        - Uses adaptive rate limiting
+        - Stores data immediately as it's fetched
+        """
         try:
             from .sdp_client import ServiceDeskPlusClient
             from .config import load_sdp_config
@@ -1983,24 +2074,76 @@ class SyncGUI:
 
             # Load config and create client
             config = load_sdp_config()
-            sdp_client = ServiceDeskPlusClient(config)
+            self._sdp_client = ServiceDeskPlusClient(config)
+            db = CompareDatabase()
 
-            # Fetch all workstations
-            logger.info("Fetching all SDP workstations...")
-            workstations = sdp_client.get_all_cmdb_workstations()
-            logger.info(f"Fetched {len(workstations)} workstations from SDP")
+            # Update initial status
+            self.root.after(0, lambda: self._update_sdp_progress(0, 100, "Fetching workstations...", ""))
+            logger.info("Fetching SDP workstations...")
+
+            # Define progress callback
+            def on_progress(fetched, total, page):
+                if self._sdp_cancelled:
+                    return
+
+                status = f"Fetching workstations: {fetched} of {total if total > 0 else '?'}"
+                rate_status = self._sdp_client.rate_limiter.get_status_line()
+                self.root.after(0, lambda f=fetched, t=total, s=status, d=rate_status:
+                                self._update_sdp_progress(f, t if t > 0 else fetched, s, d))
+
+                # Add each workstation from page to live feed
+                for ws in page:
+                    ws_name = ws.get("name", ws.get("id", "Unknown"))
+                    ws_type = "Workstation"
+                    self.root.after(0, lambda n=ws_name, t=ws_type: self._add_to_sdp_feed(n, t))
+
+            # Fetch all workstations with progress callback
+            workstations = self._sdp_client.get_all_cmdb_workstations(progress_callback=on_progress)
+
+            if self._sdp_cancelled:
+                db.close()
+                self.root.after(0, self._sdp_refresh_cancelled)
+                return
 
             # Store in database
-            db = CompareDatabase()
-            stored = db.store_sdp_workstations_full(workstations)
-            db.close()
+            self.root.after(0, lambda: self._update_sdp_progress(100, 100, "Storing in database...", ""))
+            stored = 0
+            for ws in workstations:
+                ws_id = str(ws.get("id", ""))
+                if ws_id:
+                    if db.store_sdp_workstation_single(ws, ws_id):
+                        stored += 1
 
+            db.close()
             logger.info(f"Stored {stored} SDP workstations in database")
-            self.root.after(0, lambda: self._refresh_complete("ServiceDesk Plus", stored))
+            self.root.after(0, lambda: self._sdp_refresh_done(stored))
+
         except Exception as e:
-            logger.error(f"SDP refresh failed: {e}")
-            self.root.after(0, lambda: messagebox.showerror("Error", f"SDP refresh failed: {e}"))
-            self.root.after(0, lambda: self.sync_btn.config(state=tk.NORMAL))
+            if "cancelled" in str(e).lower():
+                self.root.after(0, self._sdp_refresh_cancelled)
+            else:
+                logger.error(f"SDP refresh failed: {e}")
+                self.root.after(0, lambda: self._sdp_refresh_error(str(e)))
+
+    def _sdp_refresh_done(self, count: int):
+        """Handle successful SDP refresh completion."""
+        if hasattr(self, 'sdp_progress_win') and self.sdp_progress_win.winfo_exists():
+            self.sdp_progress_win.destroy()
+        self._refresh_complete("ServiceDesk Plus", count)
+
+    def _sdp_refresh_cancelled(self):
+        """Handle SDP refresh cancellation."""
+        if hasattr(self, 'sdp_progress_win') and self.sdp_progress_win.winfo_exists():
+            self.sdp_progress_win.destroy()
+        self.sync_btn.config(state=tk.NORMAL)
+        messagebox.showinfo("Cancelled", "ServiceDesk Plus refresh was cancelled.")
+
+    def _sdp_refresh_error(self, error: str):
+        """Handle SDP refresh error."""
+        if hasattr(self, 'sdp_progress_win') and self.sdp_progress_win.winfo_exists():
+            self.sdp_progress_win.destroy()
+        self.sync_btn.config(state=tk.NORMAL)
+        messagebox.showerror("Error", f"SDP refresh failed:\n{error}")
 
     def _refresh_complete(self, source: str, count: int = 0):
         """Handle refresh completion."""

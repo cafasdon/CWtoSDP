@@ -58,6 +58,7 @@ import requests  # HTTP library for API calls
 
 from .config import ServiceDeskPlusConfig  # Configuration dataclass
 from .logger import get_logger              # Logging utilities
+from .rate_limiter import AdaptiveRateLimiter  # Rate limiting for API calls
 
 # Create a logger for this module
 logger = get_logger("cwtosdp.sdp_client")
@@ -151,6 +152,42 @@ class ServiceDeskPlusClient:
         # Token storage (populated on first request)
         self._access_token: Optional[str] = None
         self._token_expiry: Optional[datetime] = None  # Track expiry for proactive refresh
+
+        # Cancellation flag for long-running operations
+        self._cancelled = False
+
+        # Configure adaptive rate limiter for SDP API
+        # SDP has different rate limits than CW - generally more lenient
+        self.rate_limiter = AdaptiveRateLimiter(
+            name="ServiceDeskPlus",
+            base_interval=0.5,     # Start at 2 requests per second
+            min_interval=0.2,      # Can speed up to ~5 req/sec if going well
+            max_interval=60.0,     # Max 1 min between requests if throttled
+            backoff_factor=2.0,    # Double interval when rate limited
+            speedup_factor=0.9,    # Speed up by 10% after success streak
+            success_streak_to_speedup=5  # Need 5 successes to speed up
+        )
+
+    # =========================================================================
+    # CANCELLATION SUPPORT
+    # =========================================================================
+
+    def cancel(self):
+        """
+        Cancel any ongoing long-running operations.
+
+        Call this from another thread to stop pagination loops.
+        """
+        self._cancelled = True
+        logger.info("SDP client cancellation requested")
+
+    def is_cancelled(self) -> bool:
+        """Check if cancellation has been requested."""
+        return self._cancelled
+
+    def reset_cancel(self):
+        """Reset the cancellation flag for a new operation."""
+        self._cancelled = False
 
     # =========================================================================
     # PRIVATE HELPER METHODS
@@ -310,6 +347,13 @@ class ServiceDeskPlusClient:
         # Retry loop - attempt up to max_retries times
         for attempt in range(1, self.max_retries + 1):
             try:
+                # Check for cancellation before making request
+                if self._cancelled:
+                    raise ServiceDeskPlusClientError("Operation cancelled by user")
+
+                # Wait for rate limiter before making request
+                self.rate_limiter.wait()
+
                 # Build request kwargs with auth headers
                 request_kwargs = {"headers": self._get_headers(), "timeout": 60, **kwargs}
 
@@ -322,6 +366,7 @@ class ServiceDeskPlusClient:
 
                 # Handle response based on status code
                 if resp.status_code == 200:
+                    self.rate_limiter.on_success()
                     return resp.json()
                 elif resp.status_code == 401:
                     # Unauthorized - token probably expired
@@ -329,10 +374,16 @@ class ServiceDeskPlusClient:
                     logger.warning("Token expired, refreshing...")
                     self._access_token = None
                     self.refresh_access_token()
+                    self.rate_limiter.on_error()
                     continue  # Retry with new token
-
+                elif resp.status_code == 429:
+                    # Rate limited - back off significantly
+                    logger.warning("Rate limited by SDP API, backing off...")
+                    self.rate_limiter.on_rate_limit()
+                    continue  # Retry after backoff
                 else:
                     # Other error - raise with details
+                    self.rate_limiter.on_error()
                     raise ServiceDeskPlusClientError(
                         f"Request failed: {resp.status_code} - {resp.text}"
                     )
@@ -447,16 +498,24 @@ class ServiceDeskPlusClient:
         logger.info(f"Retrieved {len(requests_list)} requests")
         return data
 
-    def get_all_cmdb_workstations(self, max_items: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_all_cmdb_workstations(
+        self,
+        max_items: Optional[int] = None,
+        progress_callback: Optional[callable] = None
+    ) -> List[Dict[str, Any]]:
         """
         Get ALL CMDB workstations with automatic pagination.
 
         This method handles pagination automatically, fetching all pages
-        until no more results are available.
+        until no more results are available. Supports cancellation and
+        progress callbacks for UI integration.
 
         Args:
             max_items: Optional limit on total items to fetch.
                       If None, fetches all available workstations.
+            progress_callback: Optional callback function called after each page.
+                              Signature: callback(fetched_count, total_count, workstations_page)
+                              If total_count is unknown, it will be 0.
 
         Returns:
             List of all workstation CI dictionaries
@@ -465,15 +524,26 @@ class ServiceDeskPlusClient:
             >>> workstations = client.get_all_cmdb_workstations()
             >>> print(f"Total: {len(workstations)}")
             >>>
-            >>> # Or limit to first 50
-            >>> workstations = client.get_all_cmdb_workstations(max_items=50)
+            >>> # With progress callback
+            >>> def on_progress(fetched, total, page):
+            ...     print(f"Fetched {fetched} of {total}")
+            >>> workstations = client.get_all_cmdb_workstations(progress_callback=on_progress)
         """
         all_workstations = []
         start_index = 1
         page_size = 100  # Max allowed by API
+        total_count = 0  # Will be updated from first response
+
+        # Reset cancellation flag at start
+        self.reset_cancel()
 
         # Pagination loop
         while True:
+            # Check for cancellation
+            if self._cancelled:
+                logger.info(f"SDP fetch cancelled after {len(all_workstations)} workstations")
+                break
+
             # Fetch one page
             data = self.get_cmdb_workstations(row_count=page_size, start_index=start_index)
             workstations = data.get("ci_workstation", [])
@@ -482,6 +552,17 @@ class ServiceDeskPlusClient:
             # Check pagination info
             list_info = data.get("list_info", {})
             has_more = list_info.get("has_more_rows", False)
+
+            # Get total count from first response (if available)
+            if total_count == 0:
+                total_count = list_info.get("total_count", 0)
+
+            # Call progress callback if provided
+            if progress_callback:
+                try:
+                    progress_callback(len(all_workstations), total_count, workstations)
+                except Exception as e:
+                    logger.warning(f"Progress callback error: {e}")
 
             # Check if we've hit the max_items limit
             if max_items and len(all_workstations) >= max_items:

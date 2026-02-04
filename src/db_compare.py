@@ -334,6 +334,90 @@ class CompareDatabase:
         logger.info(f"CW incremental check: {complete_count} complete, {len(incomplete)} need fetch")
         return incomplete
 
+    def get_incomplete_sdp_workstations(self, all_ws_ids: List[str]) -> List[str]:
+        """
+        Get list of SDP workstation IDs that need fetch.
+
+        A workstation needs fetch if:
+        1. It doesn't exist in the database at all
+        2. It exists but has only basic data (missing detailed fields like name)
+
+        This enables incremental fetch - only fetch what's missing or incomplete.
+
+        Args:
+            all_ws_ids: List of all workstation IDs from API
+
+        Returns:
+            List of workstation IDs that need to be fetched
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        # Check if table exists
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='sdp_workstations_full'"
+        )
+        if not cursor.fetchone():
+            # Table doesn't exist - need to fetch all
+            logger.info(f"No SDP data table found - need to fetch all {len(all_ws_ids)} workstations")
+            return list(all_ws_ids)
+
+        # Check which columns exist (to see if we have detailed data)
+        cursor.execute("PRAGMA table_info(sdp_workstations_full)")
+        columns = {row[1] for row in cursor.fetchall()}
+
+        # Key field that indicates detailed data
+        has_detailed_schema = "name" in columns
+
+        if not has_detailed_schema:
+            # Table exists but has only basic schema - need to refetch all
+            logger.info(f"SDP table has only basic schema - need to fetch all {len(all_ws_ids)} workstations")
+            return list(all_ws_ids)
+
+        # Get workstations that are either missing or have NULL name (incomplete)
+        incomplete = []
+
+        for ws_id in all_ws_ids:
+            cursor.execute(
+                'SELECT name FROM sdp_workstations_full WHERE id = ? OR sdp_id = ?',
+                (ws_id, ws_id)
+            )
+            row = cursor.fetchone()
+
+            if row is None:
+                # Workstation not in database
+                incomplete.append(ws_id)
+            elif row[0] is None or row[0] == "":
+                # Workstation has incomplete data (no name)
+                incomplete.append(ws_id)
+
+        complete_count = len(all_ws_ids) - len(incomplete)
+        logger.info(f"SDP incremental check: {complete_count} complete, {len(incomplete)} need fetch")
+        return incomplete
+
+    def get_sdp_workstation_count(self) -> int:
+        """
+        Get count of SDP workstations with complete data.
+
+        Returns:
+            Number of workstations with complete detailed data
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        # Check if table exists
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='sdp_workstations_full'"
+        )
+        if not cursor.fetchone():
+            return 0
+
+        # Count workstations with non-null name
+        cursor.execute(
+            "SELECT COUNT(*) FROM sdp_workstations_full WHERE name IS NOT NULL AND name != ''"
+        )
+        return cursor.fetchone()[0]
+
     def get_cw_endpoint_count(self) -> int:
         """
         Get count of CW endpoints with complete data.
