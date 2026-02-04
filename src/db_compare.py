@@ -339,7 +339,8 @@ class CompareDatabase:
         cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
 
         # Create table with all columns as TEXT (flexible for comparison)
-        columns = ["id INTEGER PRIMARY KEY AUTOINCREMENT"]
+        # Use row_id instead of id to avoid conflicts with data that has an 'id' field
+        columns = ["row_id INTEGER PRIMARY KEY AUTOINCREMENT"]
         for key in sorted(all_keys):
             safe_key = key.replace("'", "").replace('"', "")
             columns.append(f'"{safe_key}" TEXT')
