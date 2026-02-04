@@ -106,7 +106,7 @@ class ConnectWiseClient:
         >>> devices = client.get_devices()
     """
 
-    def __init__(self, config: ConnectWiseConfig, max_retries: int = 5, retry_delay: float = 1.0):
+    def __init__(self, config: ConnectWiseConfig, max_retries: int = 0, retry_delay: float = 1.0):
         """
         Initialize the ConnectWise client.
 
@@ -116,20 +116,38 @@ class ConnectWiseClient:
                     - client_secret: OAuth2 client secret
                     - base_url: API base URL
             max_retries: Maximum number of retry attempts for failed requests.
-                        Each retry uses increasing delays. Default: 5
+                        0 = infinite retries with exponential backoff (default)
+                        >0 = limit to that many attempts
             retry_delay: Base delay in seconds between retries.
-                        Actual delay = retry_delay * attempt_number. Default: 1.0
+                        Actual delay increases exponentially. Default: 1.0
 
         Note:
             Authentication happens lazily on first API call, not during init.
         """
         # Store configuration
         self.config = config
-        self.max_retries = max_retries
+        self.max_retries = max_retries  # 0 = infinite
         self.retry_delay = retry_delay
 
         # Access token storage (populated on first request)
         self._access_token: Optional[str] = None
+
+        # Cancellation flag - set to True to abort ongoing operations
+        self._cancelled = False
+
+    def cancel(self):
+        """Cancel any ongoing operations. Thread-safe."""
+        self._cancelled = True
+        logger.info("ConnectWise client: cancellation requested")
+
+    def reset_cancel(self):
+        """Reset cancellation flag for new operations."""
+        self._cancelled = False
+
+    @property
+    def is_cancelled(self) -> bool:
+        """Check if cancellation has been requested."""
+        return self._cancelled
 
         # Configure adaptive rate limiter for ConnectWise API
         # These settings are tuned based on observed CW API behavior
@@ -239,9 +257,10 @@ class ConnectWiseClient:
         This is the core method that all API calls go through. It handles:
         1. Rate limiting (via AdaptiveRateLimiter)
         2. Adding authentication headers
-        3. Retrying on transient failures
+        3. Retrying on transient failures with exponential backoff
         4. Re-authenticating on token expiry
         5. Backing off on rate limits
+        6. Cancellation support
 
         Args:
             method: HTTP method ("GET", "POST", "PUT", "DELETE")
@@ -252,7 +271,7 @@ class ConnectWiseClient:
             Parsed JSON response from the API
 
         Raises:
-            ConnectWiseClientError: If request fails after all retries
+            ConnectWiseClientError: If request fails or is cancelled
 
         Example:
             >>> data = self._make_request("GET", "/api/platform/v1/device/endpoints")
@@ -260,11 +279,26 @@ class ConnectWiseClient:
         # Build full URL from base + endpoint
         url = f"{self.config.base_url}{endpoint}"
 
-        # Retry loop - attempt up to max_retries times
-        for attempt in range(1, self.max_retries + 1):
+        # Retry loop - infinite if max_retries=0, otherwise limited
+        attempt = 0
+        while True:
+            attempt += 1
+
+            # Check for cancellation
+            if self._cancelled:
+                raise ConnectWiseClientError("Request cancelled by user")
+
+            # Check max retries (0 = infinite)
+            if self.max_retries > 0 and attempt > self.max_retries:
+                raise ConnectWiseClientError(f"Request failed after {self.max_retries} attempts")
+
             try:
                 # Wait according to rate limiter (may sleep)
                 self.rate_limiter.wait()
+
+                # Check cancellation again after wait
+                if self._cancelled:
+                    raise ConnectWiseClientError("Request cancelled by user")
 
                 # Make the HTTP request
                 resp = requests.request(
@@ -291,32 +325,30 @@ class ConnectWiseClient:
 
                 elif resp.status_code == 429:
                     # Rate limited - back off and retry
-                    # Check for Retry-After header from server
                     retry_after = resp.headers.get("Retry-After")
-                    self.rate_limiter.on_rate_limit(int(retry_after) if retry_after else None)
+                    wait_time = int(retry_after) if retry_after else None
+                    self.rate_limiter.on_rate_limit(wait_time)
+                    logger.info(f"Rate limited, backing off (attempt {attempt})...")
                     continue  # Retry after backoff
 
                 else:
-                    # Other error - inform rate limiter and raise
+                    # Other error - inform rate limiter and retry with backoff
                     self.rate_limiter.on_error()
-                    raise ConnectWiseClientError(
-                        f"Request failed: {resp.status_code} - {resp.text}"
-                    )
+                    logger.warning(f"Request failed with {resp.status_code}, retrying...")
+                    # Exponential backoff: 1s, 2s, 4s, 8s, ... capped at 60s
+                    wait_time = min(self.retry_delay * (2 ** (attempt - 1)), 60)
+                    time.sleep(wait_time)
+                    continue
 
             except requests.RequestException as e:
-                # Network/connection error - back off and maybe retry
+                # Network/connection error - back off and retry
                 self.rate_limiter.on_error()
                 logger.warning(f"Request attempt {attempt} failed: {e}")
 
-                if attempt < self.max_retries:
-                    # Sleep before retry, with increasing delay
-                    time.sleep(self.retry_delay * attempt)
-                else:
-                    # Final attempt failed - give up
-                    raise ConnectWiseClientError(f"Request failed after {self.max_retries} attempts: {e}")
-
-        # Should not reach here, but just in case
-        raise ConnectWiseClientError("Request failed: max retries exceeded")
+                # Exponential backoff: 1s, 2s, 4s, 8s, ... capped at 60s
+                wait_time = min(self.retry_delay * (2 ** (attempt - 1)), 60)
+                logger.info(f"Waiting {wait_time:.1f}s before retry...")
+                time.sleep(wait_time)
 
     # =========================================================================
     # PUBLIC API METHODS - These are the main methods users call
