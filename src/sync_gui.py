@@ -1517,25 +1517,19 @@ class SyncGUI:
             total = len(endpoints)
             logger.info(f"Found {total} endpoints, fetching detailed data...")
 
-            # Update status to show progress
-            self.root.after(0, lambda: self.status_var.set(f"Fetching details for {total} endpoints..."))
-
             # Fetch detailed information for each endpoint
             detailed_endpoints = []
             for i, endpoint in enumerate(endpoints, 1):
                 endpoint_id = endpoint.get("endpointId")
                 if endpoint_id:
-                    # Update progress every 10 endpoints
+                    # Log progress every 10 endpoints
                     if i % 10 == 0 or i == total:
-                        self.root.after(0, lambda i=i: self.status_var.set(
-                            f"Fetching endpoint {i}/{total}..."
-                        ))
+                        logger.info(f"Fetching endpoint details: {i}/{total}")
 
                     try:
                         # Fetch full details for this endpoint
                         details = cw_client.get_endpoint_details(endpoint_id)
                         detailed_endpoints.append(details)
-                        logger.debug(f"Fetched details for endpoint {i}/{total}: {endpoint_id}")
                     except Exception as e:
                         # If details fail, use basic info with a warning
                         logger.warning(f"Failed to fetch details for {endpoint_id}: {e}")
