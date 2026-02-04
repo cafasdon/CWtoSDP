@@ -1356,7 +1356,7 @@ class SyncGUI:
 
             # Load config and create client
             config = load_config()
-            cw_client = ConnectWiseClient(config)
+            cw_client = ConnectWiseClient(config.connectwise)
 
             # Fetch all endpoints
             logger.info("Fetching all CW endpoints...")
