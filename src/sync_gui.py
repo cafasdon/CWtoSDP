@@ -1511,14 +1511,43 @@ class SyncGUI:
             config = load_config()
             cw_client = ConnectWiseClient(config.connectwise)
 
-            # Fetch all endpoints
-            logger.info("Fetching all CW endpoints...")
+            # Fetch basic endpoint list first
+            logger.info("Fetching CW endpoint list...")
             endpoints = cw_client.get_devices()
-            logger.info(f"Fetched {len(endpoints)} endpoints from CW")
+            total = len(endpoints)
+            logger.info(f"Found {total} endpoints, fetching detailed data...")
+
+            # Update status to show progress
+            self.root.after(0, lambda: self.status_var.set(f"Fetching details for {total} endpoints..."))
+
+            # Fetch detailed information for each endpoint
+            detailed_endpoints = []
+            for i, endpoint in enumerate(endpoints, 1):
+                endpoint_id = endpoint.get("endpointId")
+                if endpoint_id:
+                    # Update progress every 10 endpoints
+                    if i % 10 == 0 or i == total:
+                        self.root.after(0, lambda i=i: self.status_var.set(
+                            f"Fetching endpoint {i}/{total}..."
+                        ))
+
+                    try:
+                        # Fetch full details for this endpoint
+                        details = cw_client.get_endpoint_details(endpoint_id)
+                        detailed_endpoints.append(details)
+                        logger.debug(f"Fetched details for endpoint {i}/{total}: {endpoint_id}")
+                    except Exception as e:
+                        # If details fail, use basic info with a warning
+                        logger.warning(f"Failed to fetch details for {endpoint_id}: {e}")
+                        detailed_endpoints.append(endpoint)
+                else:
+                    logger.warning(f"Endpoint missing endpointId: {endpoint}")
+
+            logger.info(f"Fetched detailed data for {len(detailed_endpoints)} endpoints")
 
             # Store in database
             db = CompareDatabase()
-            stored = db.store_cw_devices_full(endpoints)
+            stored = db.store_cw_devices_full(detailed_endpoints)
             db.close()
 
             logger.info(f"Stored {stored} CW devices in database")
