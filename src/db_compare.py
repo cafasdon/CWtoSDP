@@ -272,6 +272,98 @@ class CompareDatabase:
             cursor.execute("DELETE FROM fetch_tracker")
         conn.commit()
 
+    def get_incomplete_cw_endpoints(self, all_endpoint_ids: List[str]) -> List[str]:
+        """
+        Get list of endpoint IDs that need detailed fetch.
+
+        An endpoint needs fetch if:
+        1. It doesn't exist in the database at all
+        2. It exists but has only basic data (missing detailed fields like friendlyName)
+
+        This enables incremental fetch - only fetch what's missing or incomplete.
+
+        Args:
+            all_endpoint_ids: List of all endpoint IDs from API
+
+        Returns:
+            List of endpoint IDs that need to be fetched
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        # Check if table exists
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='cw_devices_full'"
+        )
+        if not cursor.fetchone():
+            # Table doesn't exist - need to fetch all
+            logger.info(f"No CW data table found - need to fetch all {len(all_endpoint_ids)} endpoints")
+            return list(all_endpoint_ids)
+
+        # Check which columns exist (to see if we have detailed data)
+        cursor.execute("PRAGMA table_info(cw_devices_full)")
+        columns = {row[1] for row in cursor.fetchall()}
+
+        # Key field that indicates detailed data (only present in get_endpoint_details response)
+        has_detailed_schema = "friendlyName" in columns
+
+        if not has_detailed_schema:
+            # Table exists but has only basic schema - need to refetch all
+            logger.info(f"CW table has only basic schema - need to fetch all {len(all_endpoint_ids)} endpoints")
+            return list(all_endpoint_ids)
+
+        # Get endpoints that are either missing or have NULL friendlyName (incomplete)
+        # We use friendlyName as the indicator of complete data
+        incomplete = []
+
+        for endpoint_id in all_endpoint_ids:
+            cursor.execute(
+                'SELECT friendlyName FROM cw_devices_full WHERE endpointId = ?',
+                (endpoint_id,)
+            )
+            row = cursor.fetchone()
+
+            if row is None:
+                # Endpoint not in database
+                incomplete.append(endpoint_id)
+            elif row[0] is None or row[0] == "":
+                # Endpoint has incomplete data (no friendlyName)
+                incomplete.append(endpoint_id)
+
+        complete_count = len(all_endpoint_ids) - len(incomplete)
+        logger.info(f"CW incremental check: {complete_count} complete, {len(incomplete)} need fetch")
+        return incomplete
+
+    def get_cw_endpoint_count(self) -> int:
+        """
+        Get count of CW endpoints with complete data.
+
+        Returns:
+            Number of endpoints with complete detailed data
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        # Check if table exists
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='cw_devices_full'"
+        )
+        if not cursor.fetchone():
+            return 0
+
+        # Check if friendlyName column exists
+        cursor.execute("PRAGMA table_info(cw_devices_full)")
+        columns = {row[1] for row in cursor.fetchall()}
+
+        if "friendlyName" not in columns:
+            return 0  # No detailed data
+
+        # Count endpoints with non-null friendlyName
+        cursor.execute(
+            "SELECT COUNT(*) FROM cw_devices_full WHERE friendlyName IS NOT NULL AND friendlyName != ''"
+        )
+        return cursor.fetchone()[0]
+
     # =========================================================================
     # DATA TRANSFORMATION HELPERS
     # =========================================================================
@@ -414,10 +506,11 @@ class CompareDatabase:
         cursor = conn.cursor()
 
         # Ensure table exists with at least basic columns
+        # Note: endpointId column is the unique key from the API
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS cw_devices_full (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                endpointID TEXT UNIQUE,
+                row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                endpointId TEXT UNIQUE,
                 raw_json TEXT,
                 fetched_at TEXT
             )
