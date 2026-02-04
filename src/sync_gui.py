@@ -1556,7 +1556,14 @@ class SyncGUI:
             self.cw_status_label.config(text=detail)
 
     def _do_refresh_cw(self):
-        """Background thread for CW refresh with progress updates."""
+        """
+        Background thread for CW refresh with incremental fetch.
+
+        Optimization features:
+        - Only fetches endpoints that are missing or have incomplete data
+        - Stores each endpoint immediately after fetch (resume on cancel)
+        - Shows progress: "X need fetch, Y already complete"
+        """
         try:
             from .cw_client import ConnectWiseClient
             from .config import load_config
@@ -1565,57 +1572,85 @@ class SyncGUI:
             # Load config and create client
             config = load_config()
             self._cw_client = ConnectWiseClient(config.connectwise)
+            db = CompareDatabase()
 
             # Fetch basic endpoint list first
             self.root.after(0, lambda: self._update_cw_progress(0, 100, "Fetching endpoint list...", ""))
             logger.info("Fetching CW endpoint list...")
             endpoints = self._cw_client.get_devices()
-            total = len(endpoints)
-            logger.info(f"Found {total} endpoints, fetching detailed data...")
+            total_endpoints = len(endpoints)
+            logger.info(f"Found {total_endpoints} endpoints")
 
-            # Fetch detailed information for each endpoint
-            detailed_endpoints = []
+            # Check which endpoints need detailed fetch (incremental)
+            self.root.after(0, lambda: self._update_cw_progress(0, 100,
+                "Checking for existing data...", "Optimizing API calls"))
+            all_endpoint_ids = [ep.get("endpointId") for ep in endpoints if ep.get("endpointId")]
+            incomplete_ids = set(db.get_incomplete_cw_endpoints(all_endpoint_ids))
+
+            already_complete = total_endpoints - len(incomplete_ids)
+            need_fetch = len(incomplete_ids)
+
+            if need_fetch == 0:
+                # All endpoints already have complete data
+                logger.info(f"All {total_endpoints} endpoints already have complete data - skipping API calls")
+                self.root.after(0, lambda: self._update_cw_progress(100, 100,
+                    "All data up to date!", f"{total_endpoints} endpoints already complete"))
+                db.close()
+                self.root.after(0, lambda: self._cw_refresh_done(total_endpoints))
+                return
+
+            logger.info(f"Incremental fetch: {already_complete} complete, {need_fetch} need fetch")
+
+            # Fetch detailed information for incomplete endpoints only
+            fetched = 0
             for i, endpoint in enumerate(endpoints, 1):
                 # Check for cancellation
                 if self._cw_cancelled:
+                    db.close()
                     self.root.after(0, self._cw_refresh_cancelled)
                     return
 
                 endpoint_id = endpoint.get("endpointId")
-                if endpoint_id:
-                    # Update progress with rate limiter status
-                    status = f"Fetching endpoint {i} of {total}"
-                    # Show rate info from rate limiter
-                    rate_status = self._cw_client.rate_limiter.get_status_line()
-                    detail = f"{rate_status}"
-                    self.root.after(0, lambda i=i, s=status, d=detail:
-                                    self._update_cw_progress(i, total, s, d))
-
-                    try:
-                        # Fetch full details for this endpoint
-                        details = self._cw_client.get_endpoint_details(endpoint_id)
-                        detailed_endpoints.append(details)
-                    except Exception as e:
-                        if "cancelled" in str(e).lower():
-                            self.root.after(0, self._cw_refresh_cancelled)
-                            return
-                        # If details fail, use basic info with a warning
-                        logger.warning(f"Failed to fetch details for {endpoint_id}: {e}")
-                        detailed_endpoints.append(endpoint)
-                else:
+                if not endpoint_id:
                     logger.warning(f"Endpoint missing endpointId: {endpoint}")
+                    continue
 
-            logger.info(f"Fetched detailed data for {len(detailed_endpoints)} endpoints")
+                # Skip if already complete
+                if endpoint_id not in incomplete_ids:
+                    continue
 
-            # Store in database
-            self.root.after(0, lambda: self._update_cw_progress(total, total,
-                                                                 "Saving to database...", ""))
-            db = CompareDatabase()
-            stored = db.store_cw_devices_full(detailed_endpoints)
+                # Update progress with rate limiter status
+                fetched += 1
+                status = f"Fetching {fetched} of {need_fetch} (skipped {already_complete} complete)"
+                rate_status = self._cw_client.rate_limiter.get_status_line()
+                self.root.after(0, lambda f=fetched, n=need_fetch, s=status, d=rate_status:
+                                self._update_cw_progress(f, n, s, d))
+
+                try:
+                    # Fetch full details for this endpoint
+                    details = self._cw_client.get_endpoint_details(endpoint_id)
+
+                    # Store immediately (so cancelled refreshes still save progress)
+                    db.store_cw_device_single(details, endpoint_id)
+
+                except Exception as e:
+                    if "cancelled" in str(e).lower():
+                        db.close()
+                        self.root.after(0, self._cw_refresh_cancelled)
+                        return
+                    # Log failure but continue with other endpoints
+                    logger.warning(f"Failed to fetch details for {endpoint_id}: {e}")
+
             db.close()
 
-            logger.info(f"Stored {stored} CW devices in database")
-            self.root.after(0, lambda: self._cw_refresh_done(stored))
+            # Final count of complete endpoints
+            final_db = CompareDatabase()
+            final_count = final_db.get_cw_endpoint_count()
+            final_db.close()
+
+            logger.info(f"CW refresh complete: {final_count} endpoints with full data")
+            self.root.after(0, lambda: self._cw_refresh_done(final_count))
+
         except Exception as e:
             if "cancelled" in str(e).lower():
                 self.root.after(0, self._cw_refresh_cancelled)
