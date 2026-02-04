@@ -415,7 +415,7 @@ class SyncGUI:
         self.tree.tag_configure("update", background="#cce5ff")  # Light blue - not selected
         self.tree.tag_configure("selected_update", background="#007bff", foreground="white")  # Dark blue - selected
 
-        # Track selected items by their ID (cw_name)
+        # Track selected items by their unique ID (cw_id)
         self.selected_items = set()
 
         # Track currently visible (filtered) items
@@ -741,7 +741,7 @@ class SyncGUI:
 
         items = items or self.items
         for item in items:
-            is_selected = item.cw_name in self.selected_items
+            is_selected = item.cw_id in self.selected_items
             check_mark = "☑" if is_selected else "☐"
 
             # Determine tag based on action and selection
@@ -760,7 +760,8 @@ class SyncGUI:
                 # CREATE items - all fields are new (show with ★)
                 display_fields = {k: f"★ {v}" if v else "" for k, v in fields.items()}
 
-            self.tree.insert("", tk.END, iid=item.cw_name, values=(
+            # Use cw_id as unique identifier (cw_name may have duplicates)
+            self.tree.insert("", tk.END, iid=item.cw_id, values=(
                 check_mark,
                 item.cw_name,
                 item.cw_category,
@@ -957,9 +958,9 @@ class SyncGUI:
         field change indicators for UPDATE items.
 
         Args:
-            item_id: The CW device name (used as tree item ID)
+            item_id: The CW endpoint ID (used as tree item ID)
         """
-        item = next((i for i in self.items if i.cw_name == item_id), None)
+        item = next((i for i in self.items if i.cw_id == item_id), None)
         if not item:
             return
 
@@ -994,7 +995,7 @@ class SyncGUI:
     def _select_all(self):
         """Select ALL items (not just visible/filtered)."""
         for item in self.items:
-            self.selected_items.add(item.cw_name)
+            self.selected_items.add(item.cw_id)
         self._apply_filter()  # Refresh display
         self._update_selection_label()
 
@@ -1023,14 +1024,14 @@ class SyncGUI:
         self.selected_items.clear()
         for item in self.items:
             if item.action == SyncAction.CREATE:
-                self.selected_items.add(item.cw_name)
+                self.selected_items.add(item.cw_id)
         self._apply_filter()  # Refresh display
         self._update_selection_label()
 
     def _update_selection_label(self):
         """Update the selection count label."""
         count = len(self.selected_items)
-        create_count = len([i for i in self.items if i.cw_name in self.selected_items and i.action == SyncAction.CREATE])
+        create_count = len([i for i in self.items if i.cw_id in self.selected_items and i.action == SyncAction.CREATE])
         self.selection_label.config(text=f"Selected: {count} ({create_count} CREATE)")
 
     def _execute_sync(self):
@@ -1050,7 +1051,7 @@ class SyncGUI:
         if self.selected_items:
             # Selected CREATE and UPDATE items
             sync_items = [i for i in self.items
-                         if i.cw_name in self.selected_items and
+                         if i.cw_id in self.selected_items and
                          i.action in (SyncAction.CREATE, SyncAction.UPDATE)]
             selection_mode = "SELECTED"
         else:
