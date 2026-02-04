@@ -35,3 +35,6 @@ data/
 .DS_Store
 Thumbs.db
 
+
+# Augment agent folder
+.agent/
