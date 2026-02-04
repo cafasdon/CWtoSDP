@@ -761,20 +761,22 @@ class SyncGUI:
                 display_fields = {k: f"★ {v}" if v else "" for k, v in fields.items()}
 
             # Use cw_id as unique identifier (cw_name may have duplicates)
+            # Show placeholder for missing fields
+            no_data = "(no data)"
             self.tree.insert("", tk.END, iid=item.cw_id, values=(
                 check_mark,
-                item.cw_name,
+                item.cw_name or no_data,
                 item.cw_category,
                 item.action.value.upper(),
                 item.sdp_ci_type,
                 item.match_reason or "-",
-                # SDP fields with change indicators
-                display_fields.get("name", ""),
-                display_fields.get("ci_attributes_txt_serial_number", ""),
-                display_fields.get("ci_attributes_txt_os", ""),
-                display_fields.get("ci_attributes_txt_manufacturer", ""),
-                display_fields.get("ci_attributes_txt_ip_address", ""),
-                display_fields.get("ci_attributes_txt_mac_address", ""),
+                # SDP fields with change indicators - show placeholder if empty
+                display_fields.get("name") or no_data,
+                display_fields.get("ci_attributes_txt_serial_number") or no_data,
+                display_fields.get("ci_attributes_txt_os") or no_data,
+                display_fields.get("ci_attributes_txt_manufacturer") or no_data,
+                display_fields.get("ci_attributes_txt_ip_address") or no_data,
+                display_fields.get("ci_attributes_txt_mac_address") or no_data,
             ), tags=(tag,))
 
         self._update_selection_label()
@@ -977,19 +979,21 @@ class SyncGUI:
         else:
             display_fields = {k: f"★ {v}" if v else "" for k, v in fields.items()}
 
+        # Show placeholder for missing fields (consistent with _populate_tree)
+        no_data = "(no data)"
         self.tree.item(item_id, values=(
             check_mark,
-            item.cw_name,
+            item.cw_name or no_data,
             item.cw_category,
             item.action.value.upper(),
             item.sdp_ci_type,
             item.match_reason or "-",
-            display_fields.get("name", ""),
-            display_fields.get("ci_attributes_txt_serial_number", ""),
-            display_fields.get("ci_attributes_txt_os", ""),
-            display_fields.get("ci_attributes_txt_manufacturer", ""),
-            display_fields.get("ci_attributes_txt_ip_address", ""),
-            display_fields.get("ci_attributes_txt_mac_address", ""),
+            display_fields.get("name") or no_data,
+            display_fields.get("ci_attributes_txt_serial_number") or no_data,
+            display_fields.get("ci_attributes_txt_os") or no_data,
+            display_fields.get("ci_attributes_txt_manufacturer") or no_data,
+            display_fields.get("ci_attributes_txt_ip_address") or no_data,
+            display_fields.get("ci_attributes_txt_mac_address") or no_data,
         ), tags=(tag,))
 
     def _select_all(self):
@@ -1492,16 +1496,67 @@ class SyncGUI:
             conn.close()
 
     def _refresh_cw_data(self):
-        """Refresh ConnectWise data."""
+        """Refresh ConnectWise data with progress dialog."""
         if messagebox.askyesno("Refresh CW Data",
-                               "This will re-fetch all data from ConnectWise.\nThis may take a few minutes.\n\nProceed?"):
+                               "This will re-fetch all data from ConnectWise.\n"
+                               "This may take several minutes for detailed data.\n\n"
+                               "Proceed?"):
             self.sync_btn.config(state=tk.DISABLED)
+            self._cw_client = None  # Will be set in thread
+            self._cw_cancelled = False
+            self._create_cw_progress_dialog()
             thread = threading.Thread(target=self._do_refresh_cw)
             thread.daemon = True
             thread.start()
 
+    def _create_cw_progress_dialog(self):
+        """Create progress dialog for CW refresh."""
+        self.cw_progress_win = tk.Toplevel(self.root)
+        self.cw_progress_win.title("Refreshing ConnectWise Data")
+        self.cw_progress_win.geometry("450x200")
+        self.cw_progress_win.transient(self.root)
+        self.cw_progress_win.protocol("WM_DELETE_WINDOW", self._cancel_cw_refresh)
+
+        # Center on parent
+        self.cw_progress_win.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - 450) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 200) // 2
+        self.cw_progress_win.geometry(f"+{x}+{y}")
+
+        ttk.Label(self.cw_progress_win, text="Fetching ConnectWise Endpoints",
+                  font=("Segoe UI", 12, "bold")).pack(pady=15)
+
+        self.cw_progress_bar = ttk.Progressbar(self.cw_progress_win, length=380,
+                                                mode="determinate", maximum=100)
+        self.cw_progress_bar.pack(pady=10)
+
+        self.cw_progress_label = ttk.Label(self.cw_progress_win, text="Connecting...")
+        self.cw_progress_label.pack(pady=5)
+
+        self.cw_status_label = ttk.Label(self.cw_progress_win, text="", foreground="gray")
+        self.cw_status_label.pack(pady=5)
+
+        ttk.Button(self.cw_progress_win, text="Cancel",
+                   command=self._cancel_cw_refresh).pack(pady=15)
+
+    def _cancel_cw_refresh(self):
+        """Cancel the CW refresh operation."""
+        self._cw_cancelled = True
+        if self._cw_client:
+            self._cw_client.cancel()
+        self.cw_progress_label.config(text="Cancelling...")
+        logger.info("CW refresh cancelled by user")
+
+    def _update_cw_progress(self, current: int, total: int, status: str, detail: str = ""):
+        """Update CW progress dialog from main thread."""
+        if hasattr(self, 'cw_progress_win') and self.cw_progress_win.winfo_exists():
+            pct = (current / total * 100) if total > 0 else 0
+            self.cw_progress_bar["value"] = pct
+            self.cw_progress_label.config(text=status)
+            self.cw_status_label.config(text=detail)
+
     def _do_refresh_cw(self):
-        """Background thread for CW refresh."""
+        """Background thread for CW refresh with progress updates."""
         try:
             from .cw_client import ConnectWiseClient
             from .config import load_config
@@ -1509,28 +1564,39 @@ class SyncGUI:
 
             # Load config and create client
             config = load_config()
-            cw_client = ConnectWiseClient(config.connectwise)
+            self._cw_client = ConnectWiseClient(config.connectwise)
 
             # Fetch basic endpoint list first
+            self.root.after(0, lambda: self._update_cw_progress(0, 100, "Fetching endpoint list...", ""))
             logger.info("Fetching CW endpoint list...")
-            endpoints = cw_client.get_devices()
+            endpoints = self._cw_client.get_devices()
             total = len(endpoints)
             logger.info(f"Found {total} endpoints, fetching detailed data...")
 
             # Fetch detailed information for each endpoint
             detailed_endpoints = []
             for i, endpoint in enumerate(endpoints, 1):
+                # Check for cancellation
+                if self._cw_cancelled:
+                    self.root.after(0, self._cw_refresh_cancelled)
+                    return
+
                 endpoint_id = endpoint.get("endpointId")
                 if endpoint_id:
-                    # Log progress every 10 endpoints
-                    if i % 10 == 0 or i == total:
-                        logger.info(f"Fetching endpoint details: {i}/{total}")
+                    # Update progress
+                    status = f"Fetching endpoint {i} of {total}"
+                    detail = f"{endpoint_id[:20]}..." if len(endpoint_id) > 20 else endpoint_id
+                    self.root.after(0, lambda i=i, s=status, d=detail:
+                                    self._update_cw_progress(i, total, s, d))
 
                     try:
                         # Fetch full details for this endpoint
-                        details = cw_client.get_endpoint_details(endpoint_id)
+                        details = self._cw_client.get_endpoint_details(endpoint_id)
                         detailed_endpoints.append(details)
                     except Exception as e:
+                        if "cancelled" in str(e).lower():
+                            self.root.after(0, self._cw_refresh_cancelled)
+                            return
                         # If details fail, use basic info with a warning
                         logger.warning(f"Failed to fetch details for {endpoint_id}: {e}")
                         detailed_endpoints.append(endpoint)
@@ -1540,16 +1606,40 @@ class SyncGUI:
             logger.info(f"Fetched detailed data for {len(detailed_endpoints)} endpoints")
 
             # Store in database
+            self.root.after(0, lambda: self._update_cw_progress(total, total,
+                                                                 "Saving to database...", ""))
             db = CompareDatabase()
             stored = db.store_cw_devices_full(detailed_endpoints)
             db.close()
 
             logger.info(f"Stored {stored} CW devices in database")
-            self.root.after(0, lambda: self._refresh_complete("ConnectWise", stored))
+            self.root.after(0, lambda: self._cw_refresh_done(stored))
         except Exception as e:
-            logger.error(f"CW refresh failed: {e}")
-            self.root.after(0, lambda: messagebox.showerror("Error", f"CW refresh failed: {e}"))
-            self.root.after(0, lambda: self.sync_btn.config(state=tk.NORMAL))
+            if "cancelled" in str(e).lower():
+                self.root.after(0, self._cw_refresh_cancelled)
+            else:
+                logger.error(f"CW refresh failed: {e}")
+                self.root.after(0, lambda: self._cw_refresh_error(str(e)))
+
+    def _cw_refresh_done(self, count: int):
+        """Handle successful CW refresh completion."""
+        if hasattr(self, 'cw_progress_win') and self.cw_progress_win.winfo_exists():
+            self.cw_progress_win.destroy()
+        self._refresh_complete("ConnectWise", count)
+
+    def _cw_refresh_cancelled(self):
+        """Handle CW refresh cancellation."""
+        if hasattr(self, 'cw_progress_win') and self.cw_progress_win.winfo_exists():
+            self.cw_progress_win.destroy()
+        self.sync_btn.config(state=tk.NORMAL)
+        messagebox.showinfo("Cancelled", "ConnectWise refresh was cancelled.")
+
+    def _cw_refresh_error(self, error: str):
+        """Handle CW refresh error."""
+        if hasattr(self, 'cw_progress_win') and self.cw_progress_win.winfo_exists():
+            self.cw_progress_win.destroy()
+        self.sync_btn.config(state=tk.NORMAL)
+        messagebox.showerror("Error", f"CW refresh failed:\n{error}")
 
     def _refresh_sdp_data(self):
         """Refresh ServiceDesk Plus data."""
