@@ -1007,7 +1007,7 @@ class SyncGUI:
         filter_val = self.fulldb_cw_filter.get()
 
         count = 0
-        for item in self._fulldb_cw_data:
+        for idx, item in enumerate(self._fulldb_cw_data):
             # Apply filter
             if filter_val == "Matched" and not item["is_matched"]:
                 continue
@@ -1015,7 +1015,8 @@ class SyncGUI:
                 continue
 
             tag = "matched" if item["is_matched"] else "unmatched"
-            self.fulldb_cw_tree.insert("", tk.END, iid=f"cw_{item['id']}", values=(
+            # Use unique index-based ID to avoid duplicates
+            self.fulldb_cw_tree.insert("", tk.END, iid=f"cw_row_{idx}", values=(
                 item["status"],
                 item["name"],
                 item["category"],
@@ -1032,7 +1033,7 @@ class SyncGUI:
         filter_val = self.fulldb_sdp_filter.get()
 
         count = 0
-        for item in self._fulldb_sdp_data:
+        for idx, item in enumerate(self._fulldb_sdp_data):
             # Apply filter
             if filter_val == "Matched" and not item["is_matched"]:
                 continue
@@ -1040,7 +1041,8 @@ class SyncGUI:
                 continue
 
             tag = "matched" if item["is_matched"] else "unmatched"
-            self.fulldb_sdp_tree.insert("", tk.END, iid=f"sdp_{item['id']}", values=(
+            # Use unique index-based ID to avoid duplicates
+            self.fulldb_sdp_tree.insert("", tk.END, iid=f"sdp_row_{idx}", values=(
                 item["status"],
                 item["name"],
                 item["serial"],
