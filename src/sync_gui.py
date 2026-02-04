@@ -251,7 +251,12 @@ class SyncGUI:
         self.notebook.add(self.diff_frame, text="Diff View")
         self._create_diff_tab()
 
-        # Tab 4: Field Mapping - shows CW to SDP field mappings
+        # Tab 4: Full DB Comparison - shows ALL records from both systems
+        self.fulldb_frame = ttk.Frame(self.notebook, padding="5")
+        self.notebook.add(self.fulldb_frame, text="Full DB")
+        self._create_fulldb_tab()
+
+        # Tab 5: Field Mapping - shows CW to SDP field mappings
         self.mapping_frame = ttk.Frame(self.notebook, padding="5")
         self.notebook.add(self.mapping_frame, text="Field Mapping")
         self._create_mapping_tab()
@@ -425,7 +430,7 @@ class SyncGUI:
 
         # Track currently visible (filtered) items
         self.filtered_item_ids = set()
-    
+
     def _create_category_tab(self):
         """Create category breakdown tab as proper GUI."""
         # Split into two panes
@@ -725,6 +730,328 @@ class SyncGUI:
                 sdp_value or "(empty)"
             ), tags=(sdp_tag,))
 
+
+    def _create_fulldb_tab(self):
+        """
+        Create the Full DB Comparison tab showing ALL records from both systems.
+
+        This tab shows:
+        - All CW devices (209) with their match status
+        - All SDP workstations (690) including unmatched ones
+        - Filter to show: All, CW Only, SDP Only, Matched, Unmatched
+        """
+        # Main paned window - left for CW, right for SDP
+        paned = ttk.PanedWindow(self.fulldb_frame, orient=tk.HORIZONTAL)
+        paned.pack(fill=tk.BOTH, expand=True)
+
+        # =====================================================================
+        # LEFT: ConnectWise Devices
+        # =====================================================================
+        cw_frame = ttk.LabelFrame(paned, text="ConnectWise Devices", padding=5)
+        paned.add(cw_frame, weight=1)
+
+        # CW filter row
+        cw_filter_frame = ttk.Frame(cw_frame)
+        cw_filter_frame.pack(fill=tk.X, pady=(0, 5))
+
+        ttk.Label(cw_filter_frame, text="Filter:").pack(side=tk.LEFT)
+        self.fulldb_cw_filter = ttk.Combobox(
+            cw_filter_frame, values=["All", "Matched", "Unmatched"],
+            state="readonly", width=12
+        )
+        self.fulldb_cw_filter.set("All")
+        self.fulldb_cw_filter.pack(side=tk.LEFT, padx=5)
+        self.fulldb_cw_filter.bind("<<ComboboxSelected>>", self._apply_fulldb_cw_filter)
+
+        self.fulldb_cw_count_label = ttk.Label(cw_filter_frame, text="0 devices")
+        self.fulldb_cw_count_label.pack(side=tk.RIGHT)
+
+        # CW tree
+        cw_tree_frame = ttk.Frame(cw_frame)
+        cw_tree_frame.pack(fill=tk.BOTH, expand=True)
+
+        cw_columns = ("status", "name", "category", "serial", "matched_to")
+        cw_headings = ("Status", "Device Name", "Category", "Serial #", "Matched SDP Record")
+        cw_widths = (80, 180, 100, 120, 200)
+
+        self.fulldb_cw_tree = ttk.Treeview(
+            cw_tree_frame, columns=cw_columns, show="headings", height=20
+        )
+        for i, col in enumerate(cw_columns):
+            self.fulldb_cw_tree.heading(col, text=cw_headings[i])
+            self.fulldb_cw_tree.column(col, width=cw_widths[i], minwidth=cw_widths[i])
+
+        cw_v_scroll = ttk.Scrollbar(cw_tree_frame, orient=tk.VERTICAL,
+                                     command=self.fulldb_cw_tree.yview)
+        cw_h_scroll = ttk.Scrollbar(cw_tree_frame, orient=tk.HORIZONTAL,
+                                     command=self.fulldb_cw_tree.xview)
+        self.fulldb_cw_tree.configure(yscrollcommand=cw_v_scroll.set,
+                                       xscrollcommand=cw_h_scroll.set)
+
+        self.fulldb_cw_tree.grid(row=0, column=0, sticky="nsew")
+        cw_v_scroll.grid(row=0, column=1, sticky="ns")
+        cw_h_scroll.grid(row=1, column=0, sticky="ew")
+        cw_tree_frame.grid_rowconfigure(0, weight=1)
+        cw_tree_frame.grid_columnconfigure(0, weight=1)
+
+        # CW tree tags
+        self.fulldb_cw_tree.tag_configure("matched", background="#d4edda")  # Green
+        self.fulldb_cw_tree.tag_configure("unmatched", background="#fff3cd")  # Yellow
+
+        # =====================================================================
+        # RIGHT: ServiceDesk Plus Workstations
+        # =====================================================================
+        sdp_frame = ttk.LabelFrame(paned, text="ServiceDesk Plus Workstations", padding=5)
+        paned.add(sdp_frame, weight=1)
+
+        # SDP filter row
+        sdp_filter_frame = ttk.Frame(sdp_frame)
+        sdp_filter_frame.pack(fill=tk.X, pady=(0, 5))
+
+        ttk.Label(sdp_filter_frame, text="Filter:").pack(side=tk.LEFT)
+        self.fulldb_sdp_filter = ttk.Combobox(
+            sdp_filter_frame, values=["All", "Matched", "Unmatched"],
+            state="readonly", width=12
+        )
+        self.fulldb_sdp_filter.set("All")
+        self.fulldb_sdp_filter.pack(side=tk.LEFT, padx=5)
+        self.fulldb_sdp_filter.bind("<<ComboboxSelected>>", self._apply_fulldb_sdp_filter)
+
+        self.fulldb_sdp_count_label = ttk.Label(sdp_filter_frame, text="0 workstations")
+        self.fulldb_sdp_count_label.pack(side=tk.RIGHT)
+
+        # SDP tree
+        sdp_tree_frame = ttk.Frame(sdp_frame)
+        sdp_tree_frame.pack(fill=tk.BOTH, expand=True)
+
+        sdp_columns = ("status", "name", "serial", "ip", "matched_to")
+        sdp_headings = ("Status", "Workstation Name", "Serial #", "IP Address", "Matched CW Device")
+        sdp_widths = (80, 180, 120, 120, 200)
+
+        self.fulldb_sdp_tree = ttk.Treeview(
+            sdp_tree_frame, columns=sdp_columns, show="headings", height=20
+        )
+        for i, col in enumerate(sdp_columns):
+            self.fulldb_sdp_tree.heading(col, text=sdp_headings[i])
+            self.fulldb_sdp_tree.column(col, width=sdp_widths[i], minwidth=sdp_widths[i])
+
+        sdp_v_scroll = ttk.Scrollbar(sdp_tree_frame, orient=tk.VERTICAL,
+                                      command=self.fulldb_sdp_tree.yview)
+        sdp_h_scroll = ttk.Scrollbar(sdp_tree_frame, orient=tk.HORIZONTAL,
+                                      command=self.fulldb_sdp_tree.xview)
+        self.fulldb_sdp_tree.configure(yscrollcommand=sdp_v_scroll.set,
+                                        xscrollcommand=sdp_h_scroll.set)
+
+        self.fulldb_sdp_tree.grid(row=0, column=0, sticky="nsew")
+        sdp_v_scroll.grid(row=0, column=1, sticky="ns")
+        sdp_h_scroll.grid(row=1, column=0, sticky="ew")
+        sdp_tree_frame.grid_rowconfigure(0, weight=1)
+        sdp_tree_frame.grid_columnconfigure(0, weight=1)
+
+        # SDP tree tags
+        self.fulldb_sdp_tree.tag_configure("matched", background="#d4edda")  # Green
+        self.fulldb_sdp_tree.tag_configure("unmatched", background="#f8d7da")  # Red/pink
+
+        # =====================================================================
+        # BOTTOM: Legend
+        # =====================================================================
+        legend_frame = ttk.Frame(self.fulldb_frame)
+        legend_frame.pack(fill=tk.X, pady=(5, 0))
+
+        ttk.Label(legend_frame, text="Legend:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT)
+        ttk.Label(legend_frame, text="  ● Matched", foreground="#155724",
+                  background="#d4edda").pack(side=tk.LEFT, padx=5)
+        ttk.Label(legend_frame, text="  ● CW Unmatched (will CREATE)", foreground="#856404",
+                  background="#fff3cd").pack(side=tk.LEFT, padx=5)
+        ttk.Label(legend_frame, text="  ● SDP Unmatched (no CW source)", foreground="#721c24",
+                  background="#f8d7da").pack(side=tk.LEFT, padx=5)
+
+        # Store data for filtering
+        self._fulldb_cw_data = []
+        self._fulldb_sdp_data = []
+
+    def _populate_fulldb_tab(self):
+        """
+        Populate the Full DB Comparison tab with all records from both systems.
+
+        Queries the database directly to get ALL records, not just sync items.
+        """
+        import sqlite3
+        import json
+
+        # Clear existing data
+        self.fulldb_cw_tree.delete(*self.fulldb_cw_tree.get_children())
+        self.fulldb_sdp_tree.delete(*self.fulldb_sdp_tree.get_children())
+        self._fulldb_cw_data = []
+        self._fulldb_sdp_data = []
+
+        try:
+            conn = sqlite3.connect("data/cwtosdp_compare.db")
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            # Build a set of matched SDP IDs from sync items
+            matched_sdp_ids = set()
+            matched_cw_ids = set()
+            cw_to_sdp_map = {}  # cw_id -> sdp_name
+            sdp_to_cw_map = {}  # sdp_id -> cw_name
+
+            for item in self.items:
+                if item.action == SyncAction.UPDATE and item.sdp_id:
+                    matched_sdp_ids.add(str(item.sdp_id))
+                    matched_cw_ids.add(item.cw_id)
+                    cw_to_sdp_map[item.cw_id] = item.sdp_name or item.sdp_id
+                    sdp_to_cw_map[str(item.sdp_id)] = item.cw_name
+
+            # =====================================================================
+            # Load ALL CW devices
+            # =====================================================================
+            try:
+                cursor.execute("SELECT endpointID, raw_json FROM cw_devices_full")
+                for row in cursor.fetchall():
+                    cw_id = row["endpointID"]
+                    try:
+                        device = json.loads(row["raw_json"])
+                        name = device.get("friendlyName", "(no name)")
+                        serial = device.get("system", {}).get("serialNumber", "")
+                        category = self._classify_device_category(device)
+
+                        is_matched = cw_id in matched_cw_ids
+                        matched_to = cw_to_sdp_map.get(cw_id, "") if is_matched else ""
+                        status = "MATCHED" if is_matched else "UNMATCHED"
+
+                        self._fulldb_cw_data.append({
+                            "id": cw_id,
+                            "status": status,
+                            "name": name,
+                            "category": category,
+                            "serial": serial,
+                            "matched_to": matched_to,
+                            "is_matched": is_matched
+                        })
+                    except Exception as e:
+                        logger.warning(f"Error parsing CW device {cw_id}: {e}")
+            except sqlite3.OperationalError:
+                logger.warning("CW devices table not found")
+
+            # =====================================================================
+            # Load ALL SDP workstations
+            # =====================================================================
+            try:
+                cursor.execute("SELECT id, name, ci_attributes_txt_serial_number, ci_attributes_txt_ip_address FROM sdp_workstations_full")
+                for row in cursor.fetchall():
+                    sdp_id = str(row["id"]) if row["id"] else ""
+                    name = row["name"] or "(no name)"
+                    serial = row["ci_attributes_txt_serial_number"] or ""
+                    ip = row["ci_attributes_txt_ip_address"] or ""
+
+                    is_matched = sdp_id in matched_sdp_ids
+                    matched_to = sdp_to_cw_map.get(sdp_id, "") if is_matched else ""
+                    status = "MATCHED" if is_matched else "UNMATCHED"
+
+                    self._fulldb_sdp_data.append({
+                        "id": sdp_id,
+                        "status": status,
+                        "name": name,
+                        "serial": serial,
+                        "ip": ip,
+                        "matched_to": matched_to,
+                        "is_matched": is_matched
+                    })
+            except sqlite3.OperationalError:
+                logger.warning("SDP workstations table not found")
+
+            conn.close()
+
+            # Populate trees
+            self._apply_fulldb_cw_filter()
+            self._apply_fulldb_sdp_filter()
+
+        except Exception as e:
+            logger.error(f"Error populating Full DB tab: {e}")
+
+    def _classify_device_category(self, device: dict) -> str:
+        """Classify a CW device into a category (simplified version of FieldMapper)."""
+        endpoint_type = device.get("endpointType", "").lower()
+        friendly_name = device.get("friendlyName", "").upper()
+        os_product = device.get("os", {}).get("product", "").lower()
+
+        # Check for virtual machines
+        if "vmware" in os_product or "hyper-v" in os_product:
+            return "Virtual Server"
+        if any(x in friendly_name for x in ["VM-", "VMWARE", "HYPERV"]):
+            return "Virtual Server"
+
+        # Check for servers
+        if "server" in endpoint_type or "server" in os_product:
+            return "Physical Server"
+        if any(x in friendly_name for x in ["SRV", "SERVER", "DC0", "DC1"]):
+            return "Physical Server"
+
+        # Check for network devices
+        if any(x in endpoint_type for x in ["switch", "router", "firewall"]):
+            return "Network Device"
+
+        # Check for laptops
+        if "laptop" in endpoint_type:
+            return "Laptop"
+        if any(x in friendly_name for x in ["LAPTOP", "THINKPAD", "PROBOOK", "ELITEBOOK"]):
+            return "Laptop"
+
+        # Default to Laptop for workstations
+        return "Laptop"
+
+    def _apply_fulldb_cw_filter(self, event=None):
+        """Apply filter to CW devices in Full DB tab."""
+        self.fulldb_cw_tree.delete(*self.fulldb_cw_tree.get_children())
+        filter_val = self.fulldb_cw_filter.get()
+
+        count = 0
+        for item in self._fulldb_cw_data:
+            # Apply filter
+            if filter_val == "Matched" and not item["is_matched"]:
+                continue
+            if filter_val == "Unmatched" and item["is_matched"]:
+                continue
+
+            tag = "matched" if item["is_matched"] else "unmatched"
+            self.fulldb_cw_tree.insert("", tk.END, iid=f"cw_{item['id']}", values=(
+                item["status"],
+                item["name"],
+                item["category"],
+                item["serial"],
+                item["matched_to"]
+            ), tags=(tag,))
+            count += 1
+
+        self.fulldb_cw_count_label.config(text=f"{count} devices")
+
+    def _apply_fulldb_sdp_filter(self, event=None):
+        """Apply filter to SDP workstations in Full DB tab."""
+        self.fulldb_sdp_tree.delete(*self.fulldb_sdp_tree.get_children())
+        filter_val = self.fulldb_sdp_filter.get()
+
+        count = 0
+        for item in self._fulldb_sdp_data:
+            # Apply filter
+            if filter_val == "Matched" and not item["is_matched"]:
+                continue
+            if filter_val == "Unmatched" and item["is_matched"]:
+                continue
+
+            tag = "matched" if item["is_matched"] else "unmatched"
+            self.fulldb_sdp_tree.insert("", tk.END, iid=f"sdp_{item['id']}", values=(
+                item["status"],
+                item["name"],
+                item["serial"],
+                item["ip"],
+                item["matched_to"]
+            ), tags=(tag,))
+            count += 1
+
+        self.fulldb_sdp_count_label.config(text=f"{count} workstations")
+
+
     def _create_mapping_tab(self):
         """Create field mapping reference tab as proper GUI."""
         # Split into field mapping and category mapping
@@ -844,6 +1171,7 @@ class SyncGUI:
             self._populate_tree()
             self._populate_category_tab()
             self._populate_diff_tab()
+            self._populate_fulldb_tab()
             self._update_filters()
             return
 
@@ -856,6 +1184,7 @@ class SyncGUI:
                 self._populate_tree()
                 self._populate_category_tab()
                 self._populate_diff_tab()
+                self._populate_fulldb_tab()
                 self._update_filters()
                 return
             except Exception as e:
@@ -873,6 +1202,7 @@ class SyncGUI:
             self._populate_tree()
             self._populate_category_tab()
             self._populate_diff_tab()
+            self._populate_fulldb_tab()
             self._update_filters()
         except Exception as e:
             logger.error(f"Failed to load partial data: {e}")
@@ -882,6 +1212,7 @@ class SyncGUI:
             self._populate_tree()
             self._populate_category_tab()
             self._populate_diff_tab()
+            self._populate_fulldb_tab()
             self._update_filters()
 
     def _build_partial_preview(self, cw_available: bool, sdp_available: bool) -> list:
