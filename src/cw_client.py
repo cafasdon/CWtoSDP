@@ -135,6 +135,18 @@ class ConnectWiseClient:
         # Cancellation flag - set to True to abort ongoing operations
         self._cancelled = False
 
+        # Configure adaptive rate limiter for ConnectWise API
+        # These settings are tuned based on observed CW API behavior
+        self.rate_limiter = AdaptiveRateLimiter(
+            name="ConnectWise",
+            base_interval=1.0,     # Start at 1 request per second (conservative)
+            min_interval=0.3,      # Can speed up to ~3 req/sec if going well
+            max_interval=120.0,    # Max 2 min between requests if heavily throttled
+            backoff_factor=2.0,    # Double interval when rate limited
+            speedup_factor=0.85,   # Speed up by 15% after success streak
+            success_streak_to_speedup=3  # Need 3 successes to speed up
+        )
+
     def cancel(self):
         """Cancel any ongoing operations. Thread-safe."""
         self._cancelled = True
@@ -148,18 +160,6 @@ class ConnectWiseClient:
     def is_cancelled(self) -> bool:
         """Check if cancellation has been requested."""
         return self._cancelled
-
-        # Configure adaptive rate limiter for ConnectWise API
-        # These settings are tuned based on observed CW API behavior
-        self.rate_limiter = AdaptiveRateLimiter(
-            name="ConnectWise",
-            base_interval=1.0,     # Start at 1 request per second (conservative)
-            min_interval=0.3,      # Can speed up to ~3 req/sec if going well
-            max_interval=120.0,    # Max 2 min between requests if heavily throttled
-            backoff_factor=2.0,    # Double interval when rate limited
-            speedup_factor=0.85,   # Speed up by 15% after success streak
-            success_streak_to_speedup=3  # Need 3 successes to speed up
-        )
 
     # =========================================================================
     # PRIVATE HELPER METHODS
