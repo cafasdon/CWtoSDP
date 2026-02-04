@@ -355,7 +355,8 @@ class SyncEngine:
         row = cursor.fetchone()
         if row:
             existing_fields = self._extract_sdp_fields(row)
-            return (str(row["sdp_id"]), row["name"], f"Hostname match: {row['name']}", existing_fields)
+            # Column is 'id' in the database (from SDP API response)
+            return (str(row["id"]), row["name"], f"Hostname match: {row['name']}", existing_fields)
 
         # =====================================================================
         # MATCH BY SERIAL NUMBER (Secondary method)
@@ -369,7 +370,8 @@ class SyncEngine:
             row = cursor.fetchone()
             if row:
                 existing_fields = self._extract_sdp_fields(row)
-                return (str(row["sdp_id"]), row["name"], f"Serial match: {cw_serial}", existing_fields)
+                # Column is 'id' in the database (from SDP API response)
+                return (str(row["id"]), row["name"], f"Serial match: {cw_serial}", existing_fields)
 
         # No match found
         return None
