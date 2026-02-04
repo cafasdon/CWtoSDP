@@ -540,6 +540,7 @@ class SyncGUI:
 
     def _load_data(self):
         """Load sync preview data."""
+        import sqlite3
         try:
             self.items = self.engine.build_sync_preview()
             self.summary = self.engine.get_summary(self.items)
@@ -547,6 +548,19 @@ class SyncGUI:
             self._populate_tree()
             self._populate_category_tab()
             self._update_filters()
+        except sqlite3.OperationalError as e:
+            # Handle missing tables on first run
+            if "no such table" in str(e):
+                logger.info("No data tables found - please refresh CW and SDP data first")
+                self.items = []
+                self.summary = {"total": 0, "by_action": {}, "by_category": {}, "by_ci_type": {}}
+                self._update_stats()
+                self._populate_tree()
+                self._populate_category_tab()
+                self._update_filters()
+            else:
+                logger.error(f"Database error: {e}")
+                messagebox.showerror("Error", f"Database error: {e}")
         except Exception as e:
             logger.error(f"Failed to load data: {e}")
             messagebox.showerror("Error", f"Failed to load data: {e}")
@@ -1428,12 +1442,20 @@ class SyncGUI:
         conn = sqlite3.connect("data/cwtosdp_compare.db")
         cursor = conn.cursor()
 
-        # Get counts
-        cursor.execute("SELECT COUNT(*) FROM cw_devices_full")
-        cw_count = cursor.fetchone()[0]
+        # Get counts (handle missing tables on first run)
+        cw_count = 0
+        sdp_count = 0
+        try:
+            cursor.execute("SELECT COUNT(*) FROM cw_devices_full")
+            cw_count = cursor.fetchone()[0]
+        except sqlite3.OperationalError:
+            pass  # Table doesn't exist yet
 
-        cursor.execute("SELECT COUNT(*) FROM sdp_workstations_full")
-        sdp_count = cursor.fetchone()[0]
+        try:
+            cursor.execute("SELECT COUNT(*) FROM sdp_workstations_full")
+            sdp_count = cursor.fetchone()[0]
+        except sqlite3.OperationalError:
+            pass  # Table doesn't exist yet
 
         # Check for sync log entries
         pending_syncs = 0
