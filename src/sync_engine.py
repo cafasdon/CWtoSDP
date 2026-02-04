@@ -363,15 +363,19 @@ class SyncEngine:
         # =====================================================================
         # Only try serial match if it's not a VM serial (VMware UUIDs)
         if cw_serial and "VMWARE" not in cw_serial:
-            cursor.execute(
-                "SELECT * FROM sdp_workstations_full WHERE UPPER(ci_attributes_txt_serial_number) = ?",
-                (cw_serial,)
-            )
-            row = cursor.fetchone()
-            if row:
-                existing_fields = self._extract_sdp_fields(row)
-                # Column is 'id' in the database (from SDP API response)
-                return (str(row["id"]), row["name"], f"Serial match: {cw_serial}", existing_fields)
+            try:
+                cursor.execute(
+                    "SELECT * FROM sdp_workstations_full WHERE UPPER(ci_attributes_txt_serial_number) = ?",
+                    (cw_serial,)
+                )
+                row = cursor.fetchone()
+                if row:
+                    existing_fields = self._extract_sdp_fields(row)
+                    # Column is 'id' in the database (from SDP API response)
+                    return (str(row["id"]), row["name"], f"Serial match: {cw_serial}", existing_fields)
+            except sqlite3.OperationalError:
+                # Column doesn't exist - skip serial matching
+                pass
 
         # No match found
         return None

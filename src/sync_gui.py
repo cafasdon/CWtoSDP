@@ -938,12 +938,24 @@ class SyncGUI:
             # Load ALL SDP workstations
             # =====================================================================
             try:
-                cursor.execute("SELECT id, name, ci_attributes_txt_serial_number, ci_attributes_txt_ip_address FROM sdp_workstations_full")
+                # First check which columns exist (schema may vary)
+                cursor.execute("PRAGMA table_info(sdp_workstations_full)")
+                available_cols = {row[1] for row in cursor.fetchall()}
+
+                # Build dynamic SELECT based on available columns
+                select_cols = ["id", "name"]
+                if "ci_attributes_txt_serial_number" in available_cols:
+                    select_cols.append("ci_attributes_txt_serial_number")
+                if "ci_attributes_txt_ip_address" in available_cols:
+                    select_cols.append("ci_attributes_txt_ip_address")
+
+                cursor.execute(f"SELECT {', '.join(select_cols)} FROM sdp_workstations_full")
                 for row in cursor.fetchall():
                     sdp_id = str(row["id"]) if row["id"] else ""
                     name = row["name"] or "(no name)"
-                    serial = row["ci_attributes_txt_serial_number"] or ""
-                    ip = row["ci_attributes_txt_ip_address"] or ""
+                    # Safely get optional columns
+                    serial = row["ci_attributes_txt_serial_number"] if "ci_attributes_txt_serial_number" in available_cols else ""
+                    ip = row["ci_attributes_txt_ip_address"] if "ci_attributes_txt_ip_address" in available_cols else ""
 
                     is_matched = sdp_id in matched_sdp_ids
                     matched_to = sdp_to_cw_map.get(sdp_id, "") if is_matched else ""
@@ -953,13 +965,13 @@ class SyncGUI:
                         "id": sdp_id,
                         "status": status,
                         "name": name,
-                        "serial": serial,
-                        "ip": ip,
+                        "serial": serial or "",
+                        "ip": ip or "",
                         "matched_to": matched_to,
                         "is_matched": is_matched
                     })
-            except sqlite3.OperationalError:
-                logger.warning("SDP workstations table not found")
+            except sqlite3.OperationalError as e:
+                logger.warning(f"SDP workstations table not found or error: {e}")
 
             conn.close()
 
