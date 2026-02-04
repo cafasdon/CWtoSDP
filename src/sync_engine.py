@@ -330,7 +330,15 @@ class SyncEngine:
 
             existing_fields contains the current SDP values for comparison
         """
+        import sqlite3
         cursor = self.conn.cursor()
+
+        # Check if SDP table exists (may not exist on first run before SDP refresh)
+        try:
+            cursor.execute("SELECT 1 FROM sdp_workstations_full LIMIT 1")
+        except sqlite3.OperationalError:
+            # SDP table doesn't exist yet - no matches possible
+            return None
 
         # Extract matching fields from CW device
         cw_name = cw_device.get("friendlyName", "").upper()
