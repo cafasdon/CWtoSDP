@@ -119,6 +119,16 @@ class AdaptiveRateLimiter:
         self._consecutive_successes: int = 0        # Success streak counter
         self._total_requests: int = 0               # Total requests made
         self._total_rate_limits: int = 0            # Total 429s received
+        self._total_successes: int = 0              # Total successful requests
+
+        # Optimal rate discovery - track the boundaries
+        self._fastest_accepted: float = base_interval   # Fastest interval that worked
+        self._slowest_rejected: float = 0.0             # Slowest interval that got rate limited
+        self._optimal_interval: Optional[float] = None  # Calculated optimal rate
+
+        # Performance tracking
+        self._start_time: float = time.time()
+        self._recent_intervals: list = []               # Last N intervals for averaging
     
     # =========================================================================
     # PROPERTIES - Read-only access to internal state
@@ -142,17 +152,24 @@ class AdaptiveRateLimiter:
         Useful for monitoring and debugging API interactions.
 
         Returns:
-            Dictionary with:
-            - total_requests: Total API calls made through this limiter
-            - rate_limits_hit: Number of 429 responses received
-            - current_interval: Current delay between requests
-            - requests_per_minute: Calculated throughput rate
+            Dictionary with performance metrics and optimal rate info
         """
+        elapsed = time.time() - self._start_time
+        actual_rate = self._total_requests / elapsed if elapsed > 0 else 0
+        success_rate = (self._total_successes / self._total_requests * 100) if self._total_requests > 0 else 0
+
         return {
             "total_requests": self._total_requests,
+            "total_successes": self._total_successes,
             "rate_limits_hit": self._total_rate_limits,
-            "current_interval": round(self._current_interval, 2),
-            "requests_per_minute": round(60 / self._current_interval, 1) if self._current_interval > 0 else 0
+            "success_rate_pct": round(success_rate, 1),
+            "current_interval": round(self._current_interval, 3),
+            "requests_per_minute": round(60 / self._current_interval, 1) if self._current_interval > 0 else 0,
+            "actual_rpm": round(actual_rate * 60, 1),
+            "fastest_accepted": round(self._fastest_accepted, 3),
+            "slowest_rejected": round(self._slowest_rejected, 3) if self._slowest_rejected > 0 else None,
+            "optimal_interval": round(self._optimal_interval, 3) if self._optimal_interval else None,
+            "elapsed_seconds": round(elapsed, 1),
         }
 
     # =========================================================================
@@ -200,22 +217,40 @@ class AdaptiveRateLimiter:
         after a streak of successful calls. This allows the limiter
         to find the optimal speed automatically.
 
+        Also tracks the fastest interval that was accepted to help
+        calculate the optimal rate.
+
         Example:
             >>> if response.status_code == 200:
             ...     limiter.on_success()
         """
-        # Increment success streak
+        # Track success
         self._consecutive_successes += 1
+        self._total_successes += 1
+
+        # Track fastest accepted interval (this rate worked!)
+        if self._current_interval < self._fastest_accepted:
+            self._fastest_accepted = self._current_interval
+            logger.debug(f"[{self.name}] New fastest accepted: {self._fastest_accepted:.3f}s")
+
+        # Recalculate optimal interval if we have both boundaries
+        self._calculate_optimal()
 
         # Check if we've had enough successes to speed up
         if self._consecutive_successes >= self.success_streak_to_speedup:
-            # Calculate new faster interval
-            new_interval = self._current_interval * self.speedup_factor
+            # If we know the optimal, move toward it; otherwise use speedup_factor
+            if self._optimal_interval and self._current_interval > self._optimal_interval:
+                # Move halfway toward optimal (binary search approach)
+                new_interval = (self._current_interval + self._optimal_interval) / 2
+            else:
+                # Standard speedup
+                new_interval = self._current_interval * self.speedup_factor
 
             # Only apply if above minimum (don't go faster than allowed)
             if new_interval >= self.min_interval:
                 self._current_interval = new_interval
-                logger.debug(f"[{self.name}] Speeding up: interval now {self._current_interval:.2f}s")
+                logger.debug(f"[{self.name}] Speeding up: interval now {self._current_interval:.3f}s "
+                           f"({60/self._current_interval:.1f} req/min)")
 
             # Reset streak counter
             self._consecutive_successes = 0
@@ -226,6 +261,9 @@ class AdaptiveRateLimiter:
 
         Implements exponential backoff: each rate limit doubles the interval.
         If the server provides a Retry-After header, uses that value instead.
+
+        Also tracks the slowest interval that was rejected to help
+        calculate the optimal rate (the sweet spot between accepted and rejected).
 
         Args:
             retry_after: Optional server-provided wait time in seconds
@@ -240,21 +278,36 @@ class AdaptiveRateLimiter:
         self._consecutive_successes = 0
         self._total_rate_limits += 1
 
+        # Track the slowest rejected interval (this rate was too fast!)
+        # We want to know the boundary where rate limiting kicks in
+        if self._slowest_rejected == 0 or self._current_interval > self._slowest_rejected:
+            self._slowest_rejected = self._current_interval
+            logger.info(f"[{self.name}] Rate limit boundary found at {self._slowest_rejected:.3f}s")
+
+        # Recalculate optimal interval
+        self._calculate_optimal()
+
         if retry_after:
             # Server told us exactly how long to wait - use that
             wait_time = retry_after
             self._current_interval = min(retry_after, self.max_interval)
         else:
-            # No server guidance - use exponential backoff
-            # Double the interval (or use backoff_factor)
-            self._current_interval = min(
-                self._current_interval * self.backoff_factor,
-                self.max_interval  # Don't exceed maximum
-            )
+            # If we know the optimal, jump to it with a safety margin
+            if self._optimal_interval:
+                # Use optimal + 10% safety margin
+                self._current_interval = min(self._optimal_interval * 1.1, self.max_interval)
+            else:
+                # No optimal known - use exponential backoff
+                self._current_interval = min(
+                    self._current_interval * self.backoff_factor,
+                    self.max_interval
+                )
             wait_time = self._current_interval
 
         # Log warning and wait
-        logger.warning(f"[{self.name}] Rate limit hit! Backing off to {self._current_interval:.1f}s interval. Waiting {wait_time:.0f}s...")
+        logger.warning(f"[{self.name}] Rate limit hit #{self._total_rate_limits}! "
+                      f"Interval: {self._current_interval:.2f}s ({60/self._current_interval:.1f} req/min). "
+                      f"Waiting {wait_time:.1f}s...")
         time.sleep(wait_time)
 
     def on_error(self):
@@ -279,17 +332,74 @@ class AdaptiveRateLimiter:
         )
         logger.debug(f"[{self.name}] Error, slowing down: interval now {self._current_interval:.2f}s")
 
-    def reset(self):
+    def _calculate_optimal(self):
+        """
+        Calculate the optimal interval based on accepted/rejected boundaries.
+
+        The optimal rate is the midpoint between:
+        - fastest_accepted: The fastest interval that worked
+        - slowest_rejected: The slowest interval that got rate limited
+
+        This gives us a safe operating point with some margin.
+        """
+        if self._slowest_rejected > 0 and self._fastest_accepted > self._slowest_rejected:
+            # We have both boundaries - optimal is midpoint with safety margin
+            # Add 15% buffer above the midpoint for safety
+            midpoint = (self._fastest_accepted + self._slowest_rejected) / 2
+            self._optimal_interval = midpoint * 1.15
+            logger.info(f"[{self.name}] Optimal rate calculated: {self._optimal_interval:.3f}s "
+                       f"({60/self._optimal_interval:.1f} req/min) "
+                       f"[accepted: {self._fastest_accepted:.3f}s, rejected: {self._slowest_rejected:.3f}s]")
+
+    def reset(self, keep_optimal: bool = True):
         """
         Reset the rate limiter to its initial state.
 
         Useful when starting a new batch of requests or after a long
         pause where the API may have recovered.
 
+        Args:
+            keep_optimal: If True, preserves learned optimal rate for next session.
+                         If False, resets everything including learned boundaries.
+
         Example:
-            >>> limiter.reset()  # Back to base_interval
+            >>> limiter.reset()  # Back to base_interval, keep learned rate
+            >>> limiter.reset(keep_optimal=False)  # Full reset
         """
-        self._current_interval = self.base_interval
+        # If we learned an optimal rate, start there instead of base
+        if keep_optimal and self._optimal_interval:
+            self._current_interval = self._optimal_interval
+            logger.info(f"[{self.name}] Rate limiter reset to optimal {self._optimal_interval:.3f}s "
+                       f"({60/self._optimal_interval:.1f} req/min)")
+        else:
+            self._current_interval = self.base_interval
+            logger.info(f"[{self.name}] Rate limiter reset to base {self.base_interval}s interval")
+
         self._consecutive_successes = 0
-        logger.info(f"[{self.name}] Rate limiter reset to {self.base_interval}s interval")
+        self._start_time = time.time()
+
+        if not keep_optimal:
+            # Full reset - forget learned boundaries
+            self._fastest_accepted = self.base_interval
+            self._slowest_rejected = 0.0
+            self._optimal_interval = None
+            self._total_requests = 0
+            self._total_successes = 0
+            self._total_rate_limits = 0
+
+    def get_status_line(self) -> str:
+        """
+        Get a human-readable status line for display in UI.
+
+        Returns:
+            String like "45 req/min (optimal: 50 req/min, 2 rate limits)"
+        """
+        rpm = 60 / self._current_interval if self._current_interval > 0 else 0
+        optimal_rpm = 60 / self._optimal_interval if self._optimal_interval else None
+
+        if optimal_rpm:
+            return (f"{rpm:.0f} req/min (optimal: {optimal_rpm:.0f} req/min, "
+                   f"{self._total_rate_limits} rate limits)")
+        else:
+            return f"{rpm:.0f} req/min ({self._total_rate_limits} rate limits)"
 

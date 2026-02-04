@@ -1583,9 +1583,11 @@ class SyncGUI:
 
                 endpoint_id = endpoint.get("endpointId")
                 if endpoint_id:
-                    # Update progress
+                    # Update progress with rate limiter status
                     status = f"Fetching endpoint {i} of {total}"
-                    detail = f"{endpoint_id[:20]}..." if len(endpoint_id) > 20 else endpoint_id
+                    # Show rate info from rate limiter
+                    rate_status = self._cw_client.rate_limiter.get_status_line()
+                    detail = f"{rate_status}"
                     self.root.after(0, lambda i=i, s=status, d=detail:
                                     self._update_cw_progress(i, total, s, d))
 
