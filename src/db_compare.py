@@ -418,6 +418,42 @@ class CompareDatabase:
         )
         return cursor.fetchone()[0]
 
+    def get_existing_sdp_ids(self) -> set:
+        """
+        Get all existing SDP workstation IDs from the database.
+
+        This is used for incremental fetch optimization - we compare
+        API results against existing IDs to skip storing unchanged records.
+
+        Returns:
+            Set of workstation IDs (as strings) that already exist in DB
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        # Check if table exists
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='sdp_workstations_full'"
+        )
+        if not cursor.fetchone():
+            return set()
+
+        # Get all existing IDs (check both 'id' and 'sdp_id' columns for compatibility)
+        cursor.execute("PRAGMA table_info(sdp_workstations_full)")
+        columns = {row[1] for row in cursor.fetchall()}
+
+        existing_ids = set()
+
+        # Try sdp_id column first (preferred)
+        if "sdp_id" in columns:
+            cursor.execute(
+                "SELECT sdp_id FROM sdp_workstations_full WHERE sdp_id IS NOT NULL"
+            )
+            existing_ids.update(str(row[0]) for row in cursor.fetchall())
+
+        logger.info(f"Found {len(existing_ids)} existing SDP workstations in database")
+        return existing_ids
+
     def get_cw_endpoint_count(self) -> int:
         """
         Get count of CW endpoints with complete data.

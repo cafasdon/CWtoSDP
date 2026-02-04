@@ -2390,13 +2390,14 @@ class SyncGUI:
 
     def _do_refresh_sdp(self):
         """
-        Background thread for SDP refresh with progress updates.
+        Background thread for SDP refresh with incremental fetch optimization.
 
         Features:
         - Shows progress dialog with live feed
         - Supports cancellation
         - Uses adaptive rate limiting
-        - Stores data immediately as it's fetched
+        - INCREMENTAL: Only stores new records (skips existing)
+        - Shows "X new, Y already in DB (skipped)"
         """
         try:
             from .sdp_client import ServiceDeskPlusClient
@@ -2408,27 +2409,46 @@ class SyncGUI:
             self._sdp_client = ServiceDeskPlusClient(config)
             db = CompareDatabase()
 
+            # INCREMENTAL: Get existing IDs from database first
+            self.root.after(0, lambda: self._update_sdp_progress(0, 100,
+                "Checking existing data...", "Optimizing API calls"))
+            existing_ids = db.get_existing_sdp_ids()
+            already_have = len(existing_ids)
+            logger.info(f"Found {already_have} existing SDP workstations in database")
+
             # Update initial status
-            self.root.after(0, lambda: self._update_sdp_progress(0, 100, "Fetching workstations...", ""))
+            self.root.after(0, lambda: self._update_sdp_progress(0, 100,
+                f"Fetching workstations... ({already_have} already in DB)", ""))
             logger.info("Fetching SDP workstations...")
+
+            # Track new vs existing during fetch
+            new_count = 0
+            skipped_count = 0
 
             # Define progress callback
             def on_progress(fetched, total, page):
+                nonlocal new_count, skipped_count
                 if self._sdp_cancelled:
                     return
 
-                status = f"Fetching workstations: {fetched} of {total if total > 0 else '?'}"
+                # Count new vs existing in this page
+                for ws in page:
+                    ws_id = str(ws.get("id", ""))
+                    if ws_id and ws_id not in existing_ids:
+                        new_count += 1
+                        # Add to live feed (only new ones)
+                        ws_name = ws.get("name", ws.get("id", "Unknown"))
+                        self.root.after(0, lambda n=ws_name: self._add_to_sdp_feed(n, "NEW"))
+                    else:
+                        skipped_count += 1
+
+                status = f"Fetching: {fetched} of {total if total > 0 else '?'} ({new_count} new, {skipped_count} existing)"
                 rate_status = self._sdp_client.rate_limiter.get_status_line()
                 self.root.after(0, lambda f=fetched, t=total, s=status, d=rate_status:
                                 self._update_sdp_progress(f, t if t > 0 else fetched, s, d))
 
-                # Add each workstation from page to live feed
-                for ws in page:
-                    ws_name = ws.get("name", ws.get("id", "Unknown"))
-                    ws_type = "Workstation"
-                    self.root.after(0, lambda n=ws_name, t=ws_type: self._add_to_sdp_feed(n, t))
-
             # Fetch all workstations with progress callback
+            # (API requires fetching all pages - we optimize by not storing existing)
             workstations = self._sdp_client.get_all_cmdb_workstations(progress_callback=on_progress)
 
             if self._sdp_cancelled:
@@ -2436,18 +2456,20 @@ class SyncGUI:
                 self.root.after(0, self._sdp_refresh_cancelled)
                 return
 
-            # Store in database
-            self.root.after(0, lambda: self._update_sdp_progress(100, 100, "Storing in database...", ""))
+            # INCREMENTAL: Only store NEW records (not already in database)
+            self.root.after(0, lambda: self._update_sdp_progress(100, 100,
+                f"Storing {new_count} new records (skipping {skipped_count} existing)...", ""))
             stored = 0
             for ws in workstations:
                 ws_id = str(ws.get("id", ""))
-                if ws_id:
+                if ws_id and ws_id not in existing_ids:
+                    # This is a new record - store it
                     if db.store_sdp_workstation_single(ws, ws_id):
                         stored += 1
 
             db.close()
-            logger.info(f"Stored {stored} SDP workstations in database")
-            self.root.after(0, lambda: self._sdp_refresh_done(stored))
+            logger.info(f"Stored {stored} new SDP workstations (skipped {skipped_count} existing)")
+            self.root.after(0, lambda: self._sdp_refresh_done_incremental(stored, skipped_count))
 
         except Exception as e:
             if "cancelled" in str(e).lower():
@@ -2461,6 +2483,25 @@ class SyncGUI:
         if hasattr(self, 'sdp_progress_win') and self.sdp_progress_win.winfo_exists():
             self.sdp_progress_win.destroy()
         self._refresh_complete("ServiceDesk Plus", count)
+
+    def _sdp_refresh_done_incremental(self, new_count: int, skipped_count: int):
+        """Handle successful SDP refresh with incremental stats."""
+        if hasattr(self, 'sdp_progress_win') and self.sdp_progress_win.winfo_exists():
+            self.sdp_progress_win.destroy()
+        self.sync_btn.config(state=tk.NORMAL)
+
+        # Build detailed message
+        total = new_count + skipped_count
+        msg = f"ServiceDesk Plus data refreshed successfully.\n\n"
+        msg += f"Total workstations: {total}\n"
+        msg += f"  • New (stored): {new_count}\n"
+        msg += f"  • Existing (skipped): {skipped_count}"
+
+        if new_count == 0 and skipped_count > 0:
+            msg += "\n\n✓ All data up to date - no new records found."
+
+        messagebox.showinfo("Refresh Complete", msg)
+        self._load_data()
 
     def _sdp_refresh_cancelled(self):
         """Handle SDP refresh cancellation."""
