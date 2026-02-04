@@ -1510,34 +1510,45 @@ class SyncGUI:
             thread.start()
 
     def _create_cw_progress_dialog(self):
-        """Create progress dialog for CW refresh."""
+        """Create progress dialog for CW refresh with live feed."""
         self.cw_progress_win = tk.Toplevel(self.root)
         self.cw_progress_win.title("Refreshing ConnectWise Data")
-        self.cw_progress_win.geometry("450x200")
+        self.cw_progress_win.geometry("500x350")
         self.cw_progress_win.transient(self.root)
         self.cw_progress_win.protocol("WM_DELETE_WINDOW", self._cancel_cw_refresh)
 
         # Center on parent
         self.cw_progress_win.update_idletasks()
-        x = self.root.winfo_x() + (self.root.winfo_width() - 450) // 2
-        y = self.root.winfo_y() + (self.root.winfo_height() - 200) // 2
+        x = self.root.winfo_x() + (self.root.winfo_width() - 500) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 350) // 2
         self.cw_progress_win.geometry(f"+{x}+{y}")
 
         ttk.Label(self.cw_progress_win, text="Fetching ConnectWise Endpoints",
-                  font=("Segoe UI", 12, "bold")).pack(pady=15)
+                  font=("Segoe UI", 12, "bold")).pack(pady=(15, 10))
 
-        self.cw_progress_bar = ttk.Progressbar(self.cw_progress_win, length=380,
+        self.cw_progress_bar = ttk.Progressbar(self.cw_progress_win, length=450,
                                                 mode="determinate", maximum=100)
-        self.cw_progress_bar.pack(pady=10)
+        self.cw_progress_bar.pack(pady=5)
 
         self.cw_progress_label = ttk.Label(self.cw_progress_win, text="Connecting...")
-        self.cw_progress_label.pack(pady=5)
+        self.cw_progress_label.pack(pady=3)
 
         self.cw_status_label = ttk.Label(self.cw_progress_win, text="", foreground="gray")
-        self.cw_status_label.pack(pady=5)
+        self.cw_status_label.pack(pady=3)
+
+        # Live feed frame - shows recently fetched items
+        feed_frame = ttk.LabelFrame(self.cw_progress_win, text="Recently Fetched", padding=5)
+        feed_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=5)
+
+        # Listbox for live feed (shows last N items)
+        self.cw_feed_list = tk.Listbox(feed_frame, height=6, font=("Consolas", 9))
+        self.cw_feed_list.pack(fill=tk.BOTH, expand=True)
+
+        # Initialize feed items list
+        self._cw_feed_items = []
 
         ttk.Button(self.cw_progress_win, text="Cancel",
-                   command=self._cancel_cw_refresh).pack(pady=15)
+                   command=self._cancel_cw_refresh).pack(pady=10)
 
     def _cancel_cw_refresh(self):
         """Cancel the CW refresh operation."""
@@ -1554,6 +1565,27 @@ class SyncGUI:
             self.cw_progress_bar["value"] = pct
             self.cw_progress_label.config(text=status)
             self.cw_status_label.config(text=detail)
+
+    def _add_to_cw_feed(self, device_name: str, device_type: str):
+        """Add a fetched device to the live feed display."""
+        if hasattr(self, 'cw_progress_win') and self.cw_progress_win.winfo_exists():
+            # Format: "✓ DeviceName (Type)"
+            entry = f"✓ {device_name[:40]}{'...' if len(device_name) > 40 else ''} ({device_type})"
+
+            # Add to internal list
+            self._cw_feed_items.append(entry)
+
+            # Keep only last 6 items
+            if len(self._cw_feed_items) > 6:
+                self._cw_feed_items = self._cw_feed_items[-6:]
+
+            # Update listbox
+            self.cw_feed_list.delete(0, tk.END)
+            for item in self._cw_feed_items:
+                self.cw_feed_list.insert(tk.END, item)
+
+            # Auto-scroll to bottom
+            self.cw_feed_list.see(tk.END)
 
     def _do_refresh_cw(self):
         """
@@ -1632,6 +1664,12 @@ class SyncGUI:
 
                     # Store immediately (so cancelled refreshes still save progress)
                     db.store_cw_device_single(details, endpoint_id)
+
+                    # Add to live feed - extract device name and type
+                    device_name = details.get("friendlyName", endpoint_id[:20])
+                    device_type = details.get("endpointType", "Unknown")
+                    self.root.after(0, lambda n=device_name, t=device_type:
+                                    self._add_to_cw_feed(n, t))
 
                 except Exception as e:
                     if "cancelled" in str(e).lower():
