@@ -538,35 +538,162 @@ class SyncGUI:
         # Will be populated with counts after data loads
         self.ci_tree.pack(fill=tk.BOTH, expand=True)
 
-    def _load_data(self):
-        """Load sync preview data."""
+    def _check_data_availability(self) -> dict:
+        """
+        Check which data sources are available in the database.
+
+        Returns:
+            Dictionary with 'cw_available', 'sdp_available', 'cw_count', 'sdp_count'
+        """
         import sqlite3
+        result = {'cw_available': False, 'sdp_available': False, 'cw_count': 0, 'sdp_count': 0}
+
         try:
-            self.items = self.engine.build_sync_preview()
-            self.summary = self.engine.get_summary(self.items)
-            self._update_stats()
+            conn = sqlite3.connect("data/cwtosdp_compare.db")
+            cursor = conn.cursor()
+
+            # Check CW table
+            try:
+                cursor.execute("SELECT COUNT(*) FROM cw_devices_full")
+                result['cw_count'] = cursor.fetchone()[0]
+                result['cw_available'] = result['cw_count'] > 0
+            except sqlite3.OperationalError:
+                pass
+
+            # Check SDP table
+            try:
+                cursor.execute("SELECT COUNT(*) FROM sdp_workstations_full")
+                result['sdp_count'] = cursor.fetchone()[0]
+                result['sdp_available'] = result['sdp_count'] > 0
+            except sqlite3.OperationalError:
+                pass
+
+            conn.close()
+        except Exception as e:
+            logger.warning(f"Error checking data availability: {e}")
+
+        return result
+
+    def _load_data(self):
+        """
+        Load sync preview data.
+
+        Handles three scenarios:
+        1. No data: Shows empty state with instructions
+        2. Partial data (CW only or SDP only): Shows available data without matching
+        3. Both available: Runs full sync preview with matching logic
+        """
+        import sqlite3
+
+        # Check what data is available
+        availability = self._check_data_availability()
+        cw_available = availability['cw_available']
+        sdp_available = availability['sdp_available']
+
+        if not cw_available and not sdp_available:
+            # No data at all - show empty state
+            logger.info("No data tables found - please refresh CW and SDP data")
+            self.items = []
+            self.summary = {"total": 0, "by_action": {}, "by_category": {}, "by_ci_type": {}}
+            self._update_stats_with_availability(availability)
             self._populate_tree()
             self._populate_category_tab()
             self._update_filters()
-        except sqlite3.OperationalError as e:
-            # Handle missing tables on first run
-            if "no such table" in str(e):
-                logger.info("No data tables found - please refresh CW and SDP data first")
-                self.items = []
-                self.summary = {"total": 0, "by_action": {}, "by_category": {}, "by_ci_type": {}}
-                self._update_stats()
+            return
+
+        if cw_available and sdp_available:
+            # Both available - run full sync preview with matching
+            try:
+                self.items = self.engine.build_sync_preview()
+                self.summary = self.engine.get_summary(self.items)
+                self._update_stats_with_availability(availability)
                 self._populate_tree()
                 self._populate_category_tab()
                 self._update_filters()
-            else:
-                logger.error(f"Database error: {e}")
-                messagebox.showerror("Error", f"Database error: {e}")
-        except Exception as e:
-            logger.error(f"Failed to load data: {e}")
-            messagebox.showerror("Error", f"Failed to load data: {e}")
+                return
+            except Exception as e:
+                logger.error(f"Failed to build sync preview: {e}")
+                messagebox.showerror("Error", f"Failed to build sync preview: {e}")
+                return
 
-    def _update_stats(self):
-        """Update summary statistics."""
+        # Partial data - show what we have without matching
+        try:
+            self.items = self._build_partial_preview(cw_available, sdp_available)
+            self.summary = self.engine.get_summary(self.items) if self.items else {
+                "total": 0, "by_action": {}, "by_category": {}, "by_ci_type": {}
+            }
+            self._update_stats_with_availability(availability)
+            self._populate_tree()
+            self._populate_category_tab()
+            self._update_filters()
+        except Exception as e:
+            logger.error(f"Failed to load partial data: {e}")
+            self.items = []
+            self.summary = {"total": 0, "by_action": {}, "by_category": {}, "by_ci_type": {}}
+            self._update_stats_with_availability(availability)
+            self._populate_tree()
+            self._populate_category_tab()
+            self._update_filters()
+
+    def _build_partial_preview(self, cw_available: bool, sdp_available: bool) -> list:
+        """
+        Build a preview with only partial data (CW only or SDP only).
+
+        When only CW data is available, shows all devices as pending (no matching possible).
+        When only SDP data is available, shows info message (nothing to sync from).
+        """
+        import sqlite3
+        import json
+        from .field_mapper import FieldMapper
+
+        items = []
+
+        if cw_available and not sdp_available:
+            # CW data only - show devices as CREATE (pending SDP data for matching)
+            conn = sqlite3.connect("data/cwtosdp_compare.db")
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            cursor.execute("SELECT endpointID, raw_json FROM cw_devices_full")
+            for row in cursor.fetchall():
+                try:
+                    cw_id = row["endpointID"]
+                    device = json.loads(row["raw_json"])
+
+                    # Use FieldMapper to classify and map fields
+                    mapper = FieldMapper(device)
+                    sdp_data = mapper.get_sdp_data()
+                    category = sdp_data.pop("_category")
+
+                    # Determine target SDP CI type
+                    sdp_ci_type = self.engine.CI_TYPE_MAP.get(category, "ci_windows_workstation")
+
+                    # All items are CREATE since we can't match without SDP data
+                    item = SyncItem(
+                        cw_id=cw_id,
+                        cw_name=device.get("friendlyName", ""),
+                        cw_category=category,
+                        sdp_ci_type=sdp_ci_type,
+                        action=SyncAction.CREATE,
+                        fields_to_sync=sdp_data,
+                        sdp_existing_fields={},
+                        match_reason="Pending SDP data for matching",
+                    )
+                    items.append(item)
+                except Exception as e:
+                    logger.warning(f"Error processing CW device: {e}")
+
+            conn.close()
+            logger.info(f"Loaded {len(items)} CW devices (SDP data pending for matching)")
+
+        elif sdp_available and not cw_available:
+            # SDP data only - nothing to show (sync is CW → SDP)
+            logger.info("SDP data available but no CW data - refresh CW to see sync preview")
+
+        return items
+
+    def _update_stats_with_availability(self, availability: dict):
+        """Update summary statistics with data availability info."""
         for widget in self.stats_frame.winfo_children():
             widget.destroy()
 
@@ -574,16 +701,27 @@ class SyncGUI:
         creates = self.summary.get("by_action", {}).get("create", 0)
         updates = self.summary.get("by_action", {}).get("update", 0)
 
+        cw_count = availability.get('cw_count', 0)
+        sdp_count = availability.get('sdp_count', 0)
+        cw_available = availability.get('cw_available', False)
+        sdp_available = availability.get('sdp_available', False)
+
+        # Show data source status
+        cw_status = f"CW: {cw_count}" if cw_available else "CW: ⚠ No data"
+        sdp_status = f"SDP: {sdp_count}" if sdp_available else "SDP: ⚠ No data"
+
         stats = [
+            (cw_status, "#0066cc" if cw_available else "#dc3545"),
+            (sdp_status, "#0066cc" if sdp_available else "#dc3545"),
+            ("|", "#999"),
             (f"Total: {total}", "#333"),
-            (f"Create: {creates}", "#856404"),
-            (f"Update: {updates}", "#155724"),
+            (f"Create: {creates}", "#28a745"),
+            (f"Update: {updates}", "#007bff"),
         ]
 
         for text, color in stats:
             lbl = ttk.Label(self.stats_frame, text=text, font=("Segoe UI", 11, "bold"))
-            lbl.pack(side=tk.LEFT, padx=15)
-
+            lbl.pack(side=tk.LEFT, padx=8)
     def _update_filters(self):
         """Update filter dropdowns."""
         categories = ["All"] + sorted(self.summary.get("by_category", {}).keys())
