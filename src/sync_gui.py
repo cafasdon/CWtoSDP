@@ -246,7 +246,12 @@ class SyncGUI:
         self.notebook.add(self.category_frame, text="By Category")
         self._create_category_tab()
 
-        # Tab 3: Field Mapping - shows CW to SDP field mappings
+        # Tab 3: Diff View - side-by-side comparison of CW vs SDP data
+        self.diff_frame = ttk.Frame(self.notebook, padding="5")
+        self.notebook.add(self.diff_frame, text="Diff View")
+        self._create_diff_tab()
+
+        # Tab 4: Field Mapping - shows CW to SDP field mappings
         self.mapping_frame = ttk.Frame(self.notebook, padding="5")
         self.notebook.add(self.mapping_frame, text="Field Mapping")
         self._create_mapping_tab()
@@ -480,6 +485,246 @@ class SyncGUI:
         self.cat_device_tree.tag_configure("create", background="#d4edda")  # Light green
         self.cat_device_tree.tag_configure("update", background="#cce5ff")  # Light blue
 
+    def _create_diff_tab(self):
+        """
+        Create the Diff View tab with side-by-side comparison.
+
+        Layout:
+        - Top: Device list with action filter
+        - Bottom: Side-by-side comparison panel (CW left, SDP right)
+        """
+        # Main paned window - top for device list, bottom for diff detail
+        paned = ttk.PanedWindow(self.diff_frame, orient=tk.VERTICAL)
+        paned.pack(fill=tk.BOTH, expand=True)
+
+        # =====================================================================
+        # TOP: Device list with filters
+        # =====================================================================
+        top_frame = ttk.Frame(paned)
+        paned.add(top_frame, weight=1)
+
+        # Filter row
+        filter_frame = ttk.Frame(top_frame)
+        filter_frame.pack(fill=tk.X, pady=(0, 5))
+
+        ttk.Label(filter_frame, text="Filter:").pack(side=tk.LEFT)
+        self.diff_action_filter = ttk.Combobox(
+            filter_frame, values=["All", "UPDATE Only", "CREATE Only"],
+            state="readonly", width=15
+        )
+        self.diff_action_filter.set("All")
+        self.diff_action_filter.pack(side=tk.LEFT, padx=5)
+        self.diff_action_filter.bind("<<ComboboxSelected>>", self._apply_diff_filter)
+
+        ttk.Label(filter_frame, text="(Select a device to see field comparison below)",
+                  foreground="gray").pack(side=tk.RIGHT)
+
+        # Device list tree
+        device_frame = ttk.Frame(top_frame)
+        device_frame.pack(fill=tk.BOTH, expand=True)
+
+        diff_columns = ("action", "cw_name", "sdp_name", "match_reason", "changes")
+        diff_headings = ("Action", "CW Device Name", "SDP CI Name", "Match Reason", "Changes")
+        diff_widths = (80, 250, 250, 200, 300)
+
+        self.diff_device_tree = ttk.Treeview(
+            device_frame, columns=diff_columns, show="headings", height=10
+        )
+        for i, col in enumerate(diff_columns):
+            self.diff_device_tree.heading(col, text=diff_headings[i])
+            self.diff_device_tree.column(col, width=diff_widths[i], minwidth=diff_widths[i])
+
+        # Scrollbars
+        diff_v_scroll = ttk.Scrollbar(device_frame, orient=tk.VERTICAL,
+                                       command=self.diff_device_tree.yview)
+        self.diff_device_tree.configure(yscrollcommand=diff_v_scroll.set)
+
+        self.diff_device_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        diff_v_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Color tags
+        self.diff_device_tree.tag_configure("create", background="#d4edda")
+        self.diff_device_tree.tag_configure("update", background="#cce5ff")
+
+        # Bind selection event
+        self.diff_device_tree.bind("<<TreeviewSelect>>", self._on_diff_device_select)
+
+        # =====================================================================
+        # BOTTOM: Side-by-side comparison panel
+        # =====================================================================
+        bottom_frame = ttk.LabelFrame(paned, text="Field Comparison", padding=5)
+        paned.add(bottom_frame, weight=2)
+
+        # Two-column layout for side-by-side
+        compare_frame = ttk.Frame(bottom_frame)
+        compare_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Left side: ConnectWise data
+        cw_frame = ttk.LabelFrame(compare_frame, text="ConnectWise (Source)", padding=5)
+        cw_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+
+        cw_columns = ("field", "value")
+        self.diff_cw_tree = ttk.Treeview(cw_frame, columns=cw_columns, show="headings", height=12)
+        self.diff_cw_tree.heading("field", text="Field")
+        self.diff_cw_tree.heading("value", text="Value")
+        self.diff_cw_tree.column("field", width=150)
+        self.diff_cw_tree.column("value", width=250)
+
+        cw_scroll = ttk.Scrollbar(cw_frame, orient=tk.VERTICAL, command=self.diff_cw_tree.yview)
+        self.diff_cw_tree.configure(yscrollcommand=cw_scroll.set)
+        self.diff_cw_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        cw_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Right side: ServiceDesk Plus data
+        sdp_frame = ttk.LabelFrame(compare_frame, text="ServiceDesk Plus (Target)", padding=5)
+        sdp_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5, 0))
+
+        self.diff_sdp_tree = ttk.Treeview(sdp_frame, columns=cw_columns, show="headings", height=12)
+        self.diff_sdp_tree.heading("field", text="Field")
+        self.diff_sdp_tree.heading("value", text="Value")
+        self.diff_sdp_tree.column("field", width=150)
+        self.diff_sdp_tree.column("value", width=250)
+
+        sdp_scroll = ttk.Scrollbar(sdp_frame, orient=tk.VERTICAL, command=self.diff_sdp_tree.yview)
+        self.diff_sdp_tree.configure(yscrollcommand=sdp_scroll.set)
+        self.diff_sdp_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sdp_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Configure tags for highlighting differences
+        for tree in [self.diff_cw_tree, self.diff_sdp_tree]:
+            tree.tag_configure("new", background="#c3e6cb", foreground="#155724")      # Green - new field
+            tree.tag_configure("changed", background="#fff3cd", foreground="#856404")  # Yellow - changed
+            tree.tag_configure("unchanged", background="white")                         # White - same
+            tree.tag_configure("missing", background="#f8d7da", foreground="#721c24")  # Red - missing
+
+        # Legend
+        legend_frame = ttk.Frame(bottom_frame)
+        legend_frame.pack(fill=tk.X, pady=(10, 0))
+
+        ttk.Label(legend_frame, text="Legend:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT)
+        ttk.Label(legend_frame, text="  ● New", foreground="#155724",
+                  background="#c3e6cb").pack(side=tk.LEFT, padx=5)
+        ttk.Label(legend_frame, text="  ● Changed", foreground="#856404",
+                  background="#fff3cd").pack(side=tk.LEFT, padx=5)
+        ttk.Label(legend_frame, text="  ● Missing", foreground="#721c24",
+                  background="#f8d7da").pack(side=tk.LEFT, padx=5)
+        ttk.Label(legend_frame, text="  ● Unchanged", background="white").pack(side=tk.LEFT, padx=5)
+
+    def _populate_diff_tab(self):
+        """Populate the diff view device list."""
+        self.diff_device_tree.delete(*self.diff_device_tree.get_children())
+
+        for item in self.items:
+            # Count changes for this item
+            if item.action == SyncAction.UPDATE:
+                changes = item.get_field_changes()
+                new_count = sum(1 for v in changes.values() if v == "new")
+                changed_count = sum(1 for v in changes.values() if v == "changed")
+                change_summary = f"{new_count} new, {changed_count} changed"
+            else:
+                change_summary = "All fields (new record)"
+
+            tag = item.action.value.lower()
+            self.diff_device_tree.insert("", tk.END, iid=item.cw_id, values=(
+                item.action.value.upper(),
+                item.cw_name or "(no name)",
+                item.sdp_name or "(new)",
+                item.match_reason or "-",
+                change_summary
+            ), tags=(tag,))
+
+    def _apply_diff_filter(self, event=None):
+        """Apply filter to diff view device list."""
+        filter_val = self.diff_action_filter.get()
+        self.diff_device_tree.delete(*self.diff_device_tree.get_children())
+
+        for item in self.items:
+            # Apply filter
+            if filter_val == "UPDATE Only" and item.action != SyncAction.UPDATE:
+                continue
+            if filter_val == "CREATE Only" and item.action != SyncAction.CREATE:
+                continue
+
+            # Count changes
+            if item.action == SyncAction.UPDATE:
+                changes = item.get_field_changes()
+                new_count = sum(1 for v in changes.values() if v == "new")
+                changed_count = sum(1 for v in changes.values() if v == "changed")
+                change_summary = f"{new_count} new, {changed_count} changed"
+            else:
+                change_summary = "All fields (new record)"
+
+            tag = item.action.value.lower()
+            self.diff_device_tree.insert("", tk.END, iid=item.cw_id, values=(
+                item.action.value.upper(),
+                item.cw_name or "(no name)",
+                item.sdp_name or "(new)",
+                item.match_reason or "-",
+                change_summary
+            ), tags=(tag,))
+
+    def _on_diff_device_select(self, event=None):
+        """Handle device selection in diff view - show side-by-side comparison."""
+        selection = self.diff_device_tree.selection()
+        if not selection:
+            return
+
+        cw_id = selection[0]
+
+        # Find the corresponding SyncItem
+        item = next((i for i in self.items if i.cw_id == cw_id), None)
+        if not item:
+            return
+
+        # Clear both trees
+        self.diff_cw_tree.delete(*self.diff_cw_tree.get_children())
+        self.diff_sdp_tree.delete(*self.diff_sdp_tree.get_children())
+
+        # Get field changes for UPDATE items
+        if item.action == SyncAction.UPDATE:
+            changes = item.get_field_changes()
+        else:
+            changes = {k: "new" for k in item.fields_to_sync.keys()}
+
+        # Field display names
+        field_names = {
+            "name": "Device Name",
+            "ci_attributes_txt_serial_number": "Serial Number",
+            "ci_attributes_txt_os": "Operating System",
+            "ci_attributes_txt_manufacturer": "Manufacturer",
+            "ci_attributes_txt_ip_address": "IP Address",
+            "ci_attributes_txt_mac_address": "MAC Address",
+        }
+
+        # Populate both trees with aligned fields
+        for field_key, display_name in field_names.items():
+            cw_value = item.fields_to_sync.get(field_key, "")
+            sdp_value = item.sdp_existing_fields.get(field_key, "") if item.sdp_existing_fields else ""
+
+            # Determine tag based on change status
+            change_status = changes.get(field_key, "unchanged")
+            if change_status == "new":
+                cw_tag = "new"
+                sdp_tag = "missing"
+            elif change_status == "changed":
+                cw_tag = "changed"
+                sdp_tag = "changed"
+            else:
+                cw_tag = "unchanged"
+                sdp_tag = "unchanged"
+
+            # Insert into CW tree
+            self.diff_cw_tree.insert("", tk.END, values=(
+                display_name,
+                cw_value or "(empty)"
+            ), tags=(cw_tag,))
+
+            # Insert into SDP tree
+            self.diff_sdp_tree.insert("", tk.END, values=(
+                display_name,
+                sdp_value or "(empty)"
+            ), tags=(sdp_tag,))
+
     def _create_mapping_tab(self):
         """Create field mapping reference tab as proper GUI."""
         # Split into field mapping and category mapping
@@ -598,6 +843,7 @@ class SyncGUI:
             self._update_stats_with_availability(availability)
             self._populate_tree()
             self._populate_category_tab()
+            self._populate_diff_tab()
             self._update_filters()
             return
 
@@ -609,6 +855,7 @@ class SyncGUI:
                 self._update_stats_with_availability(availability)
                 self._populate_tree()
                 self._populate_category_tab()
+                self._populate_diff_tab()
                 self._update_filters()
                 return
             except Exception as e:
@@ -625,6 +872,7 @@ class SyncGUI:
             self._update_stats_with_availability(availability)
             self._populate_tree()
             self._populate_category_tab()
+            self._populate_diff_tab()
             self._update_filters()
         except Exception as e:
             logger.error(f"Failed to load partial data: {e}")
@@ -633,6 +881,7 @@ class SyncGUI:
             self._update_stats_with_availability(availability)
             self._populate_tree()
             self._populate_category_tab()
+            self._populate_diff_tab()
             self._update_filters()
 
     def _build_partial_preview(self, cw_available: bool, sdp_available: bool) -> list:
