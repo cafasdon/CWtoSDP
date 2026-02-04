@@ -101,7 +101,15 @@ if not exist "credentials.env" (
 )
 
 REM ============================================
-REM Step 7: Launch GUI
+REM Step 7: Clear Python cache for fresh start
+REM ============================================
+echo  [....] Clearing Python cache...
+if exist "src\__pycache__" rmdir /s /q "src\__pycache__" 2>nul
+del /s /q "*.pyc" 2>nul >nul
+echo  [OK] Python cache cleared
+
+REM ============================================
+REM Step 8: Launch GUI
 REM ============================================
 echo.
 echo  Launching Sync Manager...
