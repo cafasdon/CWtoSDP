@@ -1763,7 +1763,8 @@ SCOPES=SDPOnDemand.assets.ALL,SDPOnDemand.cmdb.ALL,SDPOnDemand.requests.READ
             from .cw_client import ConnectWiseClient
             from .config import load_config
             config = load_config()
-            client = ConnectWiseClient(config)
+            # Pass the connectwise sub-config, not the full AppConfig
+            client = ConnectWiseClient(config.connectwise)
             client.authenticate()
             results.append("✅ ConnectWise: Authentication successful")
         except Exception as e:
@@ -1773,10 +1774,10 @@ SCOPES=SDPOnDemand.assets.ALL,SDPOnDemand.cmdb.ALL,SDPOnDemand.requests.READ
         try:
             from .sdp_client import ServiceDeskPlusClient
             from .config import load_sdp_config
-            config = load_sdp_config()
-            client = ServiceDeskPlusClient(config)
-            # Try to get a token
-            client._ensure_access_token()
+            sdp_config = load_sdp_config()
+            client = ServiceDeskPlusClient(sdp_config)
+            # Use refresh_access_token() to test authentication
+            client.refresh_access_token()
             results.append("✅ ServiceDesk Plus: Authentication successful")
         except Exception as e:
             results.append(f"❌ ServiceDesk Plus: {str(e)[:50]}")
