@@ -61,6 +61,7 @@ from typing import Dict, List, Optional
 
 from .db import DEFAULT_DB_PATH
 from .logger import get_logger
+from .field_mapper import DeviceClassifier
 from .sync_engine import SyncEngine, SyncAction, SyncItem
 
 # Create logger for this module
@@ -985,35 +986,8 @@ class SyncGUI:
                 conn.close()
 
     def _classify_device_category(self, device: dict) -> str:
-        """Classify a CW device into a category (simplified version of FieldMapper)."""
-        endpoint_type = device.get("endpointType", "").lower()
-        friendly_name = device.get("friendlyName", "").upper()
-        os_product = device.get("os", {}).get("product", "").lower()
-
-        # Check for virtual machines
-        if "vmware" in os_product or "hyper-v" in os_product:
-            return "Virtual Server"
-        if any(x in friendly_name for x in ["VM-", "VMWARE", "HYPERV"]):
-            return "Virtual Server"
-
-        # Check for servers
-        if "server" in endpoint_type or "server" in os_product:
-            return "Physical Server"
-        if any(x in friendly_name for x in ["SRV", "SERVER", "DC0", "DC1"]):
-            return "Physical Server"
-
-        # Check for network devices
-        if any(x in endpoint_type for x in ["switch", "router", "firewall"]):
-            return "Network Device"
-
-        # Check for laptops
-        if "laptop" in endpoint_type:
-            return "Laptop"
-        if any(x in friendly_name for x in ["LAPTOP", "THINKPAD", "PROBOOK", "ELITEBOOK"]):
-            return "Laptop"
-
-        # Default to Laptop for workstations
-        return "Laptop"
+        """Classify a CW device into a category using DeviceClassifier for consistency."""
+        return DeviceClassifier.classify(device)
 
     def _apply_fulldb_cw_filter(self, event=None):
         """Apply filter to CW devices in Full DB tab."""
