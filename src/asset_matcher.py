@@ -13,10 +13,11 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from .logger import get_logger
+from .db import DEFAULT_DB_PATH
 
 logger = get_logger("cwtosdp.asset_matcher")
 
-DB_PATH = Path("./data/cwtosdp_compare.db")
+DB_PATH = DEFAULT_DB_PATH
 
 
 class AssetMatcherApp:

@@ -54,6 +54,7 @@ import json
 import sqlite3
 import threading
 import tkinter as tk
+from datetime import datetime
 from tkinter import ttk, messagebox
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -1740,7 +1741,6 @@ class SyncGUI:
         Tracks created IDs for revert capability.
         """
         from .sdp_client import SDPClient
-        from datetime import datetime
 
         created_ids = []  # Track created items for revert
         sync_results = []  # Track all results for results tab
@@ -1857,7 +1857,6 @@ class SyncGUI:
 
     def _save_sync_log(self, created_ids: List[Dict]):
         """Save sync log to database for revert capability."""
-        from datetime import datetime
 
         conn = None
         try:
@@ -1900,7 +1899,7 @@ class SyncGUI:
         """Handle sync error."""
         self.sync_in_progress = False
         self._on_real_sync_toggle()  # Reset button text
-        if hasattr(self, 'progress_win'):
+        if hasattr(self, 'progress_win') and self.progress_win.winfo_exists():
             self.progress_win.destroy()
         messagebox.showerror("Sync Error", msg)
 
@@ -1932,7 +1931,6 @@ class SyncGUI:
     def _create_results_tab(self, results: List[Dict], success: int, errors: int,
                            is_dry_run: bool, duration: float):
         """Create or update the Sync Results tab."""
-        from datetime import datetime
 
         # Remove existing results tab if present
         for tab_id in self.notebook.tabs():
@@ -2035,7 +2033,12 @@ class SyncGUI:
         self.notebook.select(results_frame)
 
     def _revert_sync(self):
-        """Revert the last sync operation."""
+        """Revert the last sync operation.
+
+        NOTE: Only CREATE operations are logged and revertable (via DELETE).
+        UPDATE operations are not logged because we don't store the previous
+        field values needed to restore the original state.
+        """
         conn = None
         try:
             # Get last sync log
@@ -2150,7 +2153,8 @@ class SyncGUI:
         self._cw_cancelled = True
         if self._cw_client:
             self._cw_client.cancel()
-        self.cw_progress_label.config(text="Cancelling...")
+        if hasattr(self, 'cw_progress_win') and self.cw_progress_win.winfo_exists():
+            self.cw_progress_label.config(text="Cancelling...")
         logger.info("CW refresh cancelled by user")
 
     def _update_cw_progress(self, current: int, total: int, status: str, detail: str = ""):
@@ -2397,7 +2401,8 @@ class SyncGUI:
         self._sdp_cancelled = True
         if self._sdp_client:
             self._sdp_client.cancel()
-        self.sdp_progress_label.config(text="Cancelling...")
+        if hasattr(self, 'sdp_progress_win') and self.sdp_progress_win.winfo_exists():
+            self.sdp_progress_label.config(text="Cancelling...")
         logger.info("SDP refresh cancelled by user")
 
     def _update_sdp_progress(self, current: int, total: int, status: str, detail: str = ""):
@@ -2531,7 +2536,7 @@ class SyncGUI:
         msg = f"ServiceDesk Plus data refreshed successfully.\n\n"
         msg += f"Total workstations: {total}\n"
         msg += f"  • New (stored): {new_count}\n"
-        msg += f"  • Existing (skipped): {skipped_count}"
+        msg += f"  • Existing (refreshed): {skipped_count}"
 
         if new_count == 0 and skipped_count > 0:
             msg += "\n\n✓ All data up to date - no new records found."

@@ -50,6 +50,7 @@ Usage Example:
     client.create_ci("ci_windows_workstation", {"name": "NEW-PC-001"})
 """
 
+import json
 import time
 import threading
 from datetime import datetime, timedelta
@@ -185,6 +186,7 @@ class ServiceDeskPlusClient:
         self._cancelled = True
         logger.info("SDP client cancellation requested")
 
+    @property
     def is_cancelled(self) -> bool:
         """Check if cancellation has been requested."""
         return self._cancelled
@@ -349,66 +351,99 @@ class ServiceDeskPlusClient:
         # Build full URL from base + endpoint
         url = f"{self.config.api_base_url}{endpoint}"
 
-        # Retry loop - attempt up to max_retries times
-        for attempt in range(1, self.max_retries + 1):
-            try:
-                # Check for cancellation before making request
-                if self._cancelled:
-                    raise ServiceDeskPlusClientError("Operation cancelled by user")
+        # Retry loop - mirrors CW client pattern:
+        # - while True with explicit max_retries check
+        # - 401 (token refresh) and 429 (rate limit) do NOT count against attempts
+        # - 5xx errors retry with exponential backoff
+        # - 0 = infinite retries (useful for long pagination runs)
+        attempt = 0
+        while True:
+            attempt += 1
 
+            # Check for cancellation
+            if self._cancelled:
+                raise ServiceDeskPlusClientError("Operation cancelled by user")
+
+            # Check max retries (0 = infinite)
+            if self.max_retries > 0 and attempt > self.max_retries:
+                raise ServiceDeskPlusClientError(
+                    f"Request failed after {self.max_retries} attempts"
+                )
+
+            try:
                 # Wait for rate limiter before making request
                 self.rate_limiter.wait()
+
+                # Check cancellation again after wait
+                if self._cancelled:
+                    raise ServiceDeskPlusClientError("Operation cancelled by user")
 
                 # Build request kwargs with auth headers
                 request_kwargs = {"headers": self._get_headers(), "timeout": 60, **kwargs}
 
                 # SDP API uses input_data form field for POST/PUT data
+                # The data parameter should be a raw dict; we JSON-serialize it here.
+                # This is the SINGLE place where input_data wrapping happens.
                 if data:
-                    request_kwargs["data"] = {"input_data": str(data)}
+                    request_kwargs["data"] = {"input_data": json.dumps(data)}
 
                 # Make the HTTP request
                 resp = requests.request(method, url, **request_kwargs)
 
                 # Handle response based on status code
                 if resp.status_code == 200:
+                    # Success - inform rate limiter and return data
                     self.rate_limiter.on_success()
                     return resp.json()
+
                 elif resp.status_code == 401:
                     # Unauthorized - token probably expired
                     # Clear token and refresh, then retry
+                    # Does NOT count against max_retries (decrement attempt)
                     logger.warning("Token expired, refreshing...")
                     with self._lock:
                         self._access_token = None
                         self.refresh_access_token()
-                    self.rate_limiter.on_error()
+                    attempt -= 1  # Don't count auth refresh as a retry
                     continue  # Retry with new token
+
                 elif resp.status_code == 429:
                     # Rate limited - back off significantly
-                    logger.warning("Rate limited by SDP API, backing off...")
-                    self.rate_limiter.on_rate_limit()
+                    # Does NOT count against max_retries (decrement attempt)
+                    retry_after = resp.headers.get("Retry-After")
+                    wait_time = int(retry_after) if retry_after else None
+                    self.rate_limiter.on_rate_limit(wait_time)
+                    logger.info(f"Rate limited, backing off (attempt {attempt})...")
+                    attempt -= 1  # Don't count rate limit as a retry
                     continue  # Retry after backoff
+
+                elif resp.status_code >= 500:
+                    # Server error (500, 502, 503, 504) - retry with backoff
+                    self.rate_limiter.on_error()
+                    logger.warning(
+                        f"Server error {resp.status_code}, retrying..."
+                    )
+                    # Exponential backoff: 1s, 2s, 4s, 8s, ... capped at 60s
+                    wait_time = min(self.retry_delay * (2 ** (attempt - 1)), 60)
+                    time.sleep(wait_time)
+                    continue
+
                 else:
-                    # Other error - raise with details
+                    # Client error (4xx except 401/429) - not retryable
                     self.rate_limiter.on_error()
                     raise ServiceDeskPlusClientError(
                         f"Request failed: {resp.status_code} - {resp.text}"
                     )
 
             except requests.RequestException as e:
-                # Network/connection error - back off and maybe retry
+                # Network/connection error - back off and retry
+                self.rate_limiter.on_error()
                 logger.warning(f"Request attempt {attempt} failed: {e}")
 
-                if attempt < self.max_retries:
-                    # Sleep before retry, with increasing delay
-                    time.sleep(self.retry_delay * attempt)
-                else:
-                    # Final attempt failed - give up
-                    raise ServiceDeskPlusClientError(
-                        f"Request failed after {self.max_retries} attempts: {e}"
-                    )
-
-        # Should not reach here, but just in case
-        raise ServiceDeskPlusClientError("Request failed: max retries exceeded")
+                # Exponential backoff: 1s, 2s, 4s, 8s, ... capped at 60s
+                wait_time = min(self.retry_delay * (2 ** (attempt - 1)), 60)
+                logger.info(f"Waiting {wait_time:.1f}s before retry...")
+                time.sleep(wait_time)
 
     # =========================================================================
     # READ OPERATIONS (Safe for production - no data modification)
@@ -461,7 +496,6 @@ class ServiceDeskPlusClient:
         logger.info(f"Fetching CMDB workstations (start: {start_index}, count: {row_count})...")
 
         # CMDB API uses input_data parameter for list_info (different from assets API)
-        import json
         list_info = {"list_info": {"row_count": row_count, "start_index": start_index}}
         endpoint = f"/cmdb/ci_workstation?input_data={json.dumps(list_info)}"
 
@@ -627,8 +661,6 @@ class ServiceDeskPlusClient:
             logger.info(f"[DRY RUN] Would create {ci_type}: {data.get('name', 'unknown')}")
             return {"dry_run": True, "would_create": data}
 
-        import json
-
         # Build the request payload
         # SDP expects nested structure: {"ci_type": {"name": "...", "ci_attributes": {...}}}
         ci_data = {ci_type: {}}
@@ -649,12 +681,11 @@ class ServiceDeskPlusClient:
                 # Keep full field name as SDP expects it
                 ci_data[ci_type]["ci_attributes"][key] = value
 
-        # Build endpoint and payload
+        # Build endpoint - pass raw dict, _make_request handles JSON serialization
         endpoint = f"/cmdb/{ci_type}"
-        input_data = {"input_data": json.dumps(ci_data)}
 
         try:
-            result = self._make_request("POST", endpoint, data=input_data)
+            result = self._make_request("POST", endpoint, data=ci_data)
             logger.info(f"Created {ci_type}: {data.get('name', 'unknown')}")
             return result
         except ServiceDeskPlusClientError as e:
@@ -700,8 +731,6 @@ class ServiceDeskPlusClient:
             logger.info(f"[DRY RUN] Would update {ci_type}/{ci_id}: {data.get('name', 'unknown')}")
             return {"dry_run": True, "would_update": data, "ci_id": ci_id}
 
-        import json
-
         # Build the request payload (same structure as create)
         # SDP expects nested structure: {"ci_type": {"name": "...", "ci_attributes": {...}}}
         ci_data = {ci_type: {}}
@@ -722,12 +751,11 @@ class ServiceDeskPlusClient:
                 # Keep full field name as SDP expects it
                 ci_data[ci_type]["ci_attributes"][key] = value
 
-        # Build endpoint and payload - PUT to specific CI ID
+        # Build endpoint - pass raw dict, _make_request handles JSON serialization
         endpoint = f"/cmdb/{ci_type}/{ci_id}"
-        input_data = {"input_data": json.dumps(ci_data)}
 
         try:
-            result = self._make_request("PUT", endpoint, data=input_data)
+            result = self._make_request("PUT", endpoint, data=ci_data)
             logger.info(f"Updated {ci_type}/{ci_id}: {data.get('name', 'unknown')}")
             return result
         except ServiceDeskPlusClientError as e:
