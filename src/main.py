@@ -142,9 +142,84 @@ def fetch_connectwise_data(config: AppConfig) -> dict:
         retry_delay=config.retry_delay_seconds
     )
 
-    # Fetch all data types
+    # Fetch basic device list first
+    basic_devices = cw_client.get_devices()
+    
+    # Fetch details for each device (required for name/serial matching)
+    # Fetch details with parallel execution
+    devices = []
+    
+    # Store devices that don't need fetching (no ID)
+    no_id_devices = [d for d in basic_devices if not d.get("endpointId")]
+    devices.extend(no_id_devices)
+    
+    # Batch size for incremental storage
+    batch_size = 10
+    batch = list(no_id_devices) # Start batch with pre-loaded items
+    
+    # DB instance for incremental storage
+    db = Database()
+    
+    # Pre-authenticate to avoid race conditions in threads
+    try:
+        cw_client.authenticate()
+    except Exception as e:
+        logger.error(f"Authentication failed before fetching details: {e}")
+        return {"devices": basic_devices, "sites": [], "companies": []}
+
+    # Parallel execution configuration
+    max_workers = 5
+    logger.info(f"Fetching full details for {len(basic_devices)} devices using {max_workers} threads...")
+
+    import concurrent.futures
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all tasks
+        future_to_dev = {
+            executor.submit(cw_client.get_endpoint_details, dev["endpointId"]): dev
+            for dev in basic_devices 
+            if dev.get("endpointId")
+        }
+        
+        # Process results as they complete
+        completed_count = 0
+        total_tasks = len(future_to_dev)
+        
+        for future in concurrent.futures.as_completed(future_to_dev):
+            dev = future_to_dev[future]
+            try:
+                details = future.result()
+                
+                # Critical check for rich data
+                if "friendlyName" not in details:
+                    logger.warning(f"WARN: Fetched details for {dev.get('endpointId')} missing 'friendlyName'. Keys: {list(details.keys())[:5]}...")
+                    
+                devices.append(details)
+                batch.append(details)
+            except Exception as e:
+                logger.error(f"Failed to fetch details for {dev.get('endpointId')}: {e}")
+                devices.append(dev) # Fallback to basic info
+                batch.append(dev)
+            
+            completed_count += 1
+            
+            # Store batch every 10 items
+            if len(batch) >= batch_size:
+                db.store_cw_devices(batch)
+                logger.debug(f"Stored batch of {len(batch)} devices")
+                batch = []
+                
+            # Log progress every 10 items
+            if completed_count % 10 == 0:
+                logger.info(f"Progress: {completed_count}/{total_tasks} details fetched")
+
+    # Store remaining items
+    if batch:
+        db.store_cw_devices(batch)
+
+    # Fetch other data types
     data = {
-        "devices": cw_client.get_devices(),      # Endpoint devices
+        "devices": devices,      # Detailed endpoint devices
         "sites": cw_client.get_sites(),          # Site/location info
         "companies": cw_client.get_companies(),  # Company/org info
     }

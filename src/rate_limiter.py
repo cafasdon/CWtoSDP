@@ -50,6 +50,7 @@ Usage:
 """
 
 import time
+import threading
 from typing import Optional
 
 from .logger import get_logger
@@ -61,25 +62,11 @@ logger = get_logger("cwtosdp.rate_limiter")
 class AdaptiveRateLimiter:
     """
     Adaptive rate limiter with exponential backoff for API requests.
+    Thread-safe implementation using RLock.
 
     This class tracks request timing and automatically adjusts the delay
     between requests based on success/failure patterns. It prevents
     overwhelming APIs while maximizing throughput when conditions allow.
-
-    Attributes:
-        name: Identifier for logging (e.g., "ConnectWise", "SDP")
-        base_interval: Starting delay between requests (seconds)
-        min_interval: Minimum allowed delay (fastest rate)
-        max_interval: Maximum allowed delay (slowest rate)
-        backoff_factor: Multiplier when rate limited (e.g., 2.0 = double)
-        speedup_factor: Multiplier on success (e.g., 0.9 = 10% faster)
-        success_streak_to_speedup: How many successes before speeding up
-
-    Example:
-        >>> limiter = AdaptiveRateLimiter(name="CW", base_interval=1.0)
-        >>> limiter.wait()  # Waits up to 1 second
-        >>> # ... make API call ...
-        >>> limiter.on_success()  # May speed up next request
     """
 
     def __init__(
@@ -112,6 +99,9 @@ class AdaptiveRateLimiter:
         self.backoff_factor = backoff_factor
         self.speedup_factor = speedup_factor
         self.success_streak_to_speedup = success_streak_to_speedup
+
+        # Thread safety
+        self._lock = threading.RLock()
 
         # Internal state (prefixed with _ to indicate private)
         self._current_interval = base_interval      # Current delay between requests
@@ -154,23 +144,24 @@ class AdaptiveRateLimiter:
         Returns:
             Dictionary with performance metrics and optimal rate info
         """
-        elapsed = time.time() - self._start_time
-        actual_rate = self._total_requests / elapsed if elapsed > 0 else 0
-        success_rate = (self._total_successes / self._total_requests * 100) if self._total_requests > 0 else 0
+        with self._lock:
+            elapsed = time.time() - self._start_time
+            actual_rate = self._total_requests / elapsed if elapsed > 0 else 0
+            success_rate = (self._total_successes / self._total_requests * 100) if self._total_requests > 0 else 0
 
-        return {
-            "total_requests": self._total_requests,
-            "total_successes": self._total_successes,
-            "rate_limits_hit": self._total_rate_limits,
-            "success_rate_pct": round(success_rate, 1),
-            "current_interval": round(self._current_interval, 3),
-            "requests_per_minute": round(60 / self._current_interval, 1) if self._current_interval > 0 else 0,
-            "actual_rpm": round(actual_rate * 60, 1),
-            "fastest_accepted": round(self._fastest_accepted, 3),
-            "slowest_rejected": round(self._slowest_rejected, 3) if self._slowest_rejected > 0 else None,
-            "optimal_interval": round(self._optimal_interval, 3) if self._optimal_interval else None,
-            "elapsed_seconds": round(elapsed, 1),
-        }
+            return {
+                "total_requests": self._total_requests,
+                "total_successes": self._total_successes,
+                "rate_limits_hit": self._total_rate_limits,
+                "success_rate_pct": round(success_rate, 1),
+                "current_interval": round(self._current_interval, 3),
+                "requests_per_minute": round(60 / self._current_interval, 1) if self._current_interval > 0 else 0,
+                "actual_rpm": round(actual_rate * 60, 1),
+                "fastest_accepted": round(self._fastest_accepted, 3),
+                "slowest_rejected": round(self._slowest_rejected, 3) if self._slowest_rejected > 0 else None,
+                "optimal_interval": round(self._optimal_interval, 3) if self._optimal_interval else None,
+                "elapsed_seconds": round(elapsed, 1),
+            }
 
     # =========================================================================
     # CORE METHODS - Called before/after each API request
@@ -191,23 +182,24 @@ class AdaptiveRateLimiter:
             >>> response = api.get("/endpoint")
             >>> limiter.on_success()
         """
-        # Get current time
-        now = time.time()
+        with self._lock:
+            # Get current time
+            now = time.time()
 
-        # Calculate how long since last request
-        elapsed = now - self._last_request_time
+            # Calculate how long since last request
+            elapsed = now - self._last_request_time
 
-        # If not enough time has passed, wait
-        if elapsed < self._current_interval:
-            wait_time = self._current_interval - elapsed
-            # Only log if waiting more than 1 second (avoid log spam)
-            if wait_time > 1.0:
-                logger.debug(f"[{self.name}] Rate limiting: waiting {wait_time:.1f}s")
-            time.sleep(wait_time)
+            # If not enough time has passed, wait
+            if elapsed < self._current_interval:
+                wait_time = self._current_interval - elapsed
+                # Only log if waiting more than 1 second (avoid log spam)
+                if wait_time > 1.0:
+                    logger.debug(f"[{self.name}] Rate limiting: waiting {wait_time:.1f}s")
+                time.sleep(wait_time)
 
-        # Record this request time for next calculation
-        self._last_request_time = time.time()
-        self._total_requests += 1
+            # Record this request time for next calculation
+            self._last_request_time = time.time()
+            self._total_requests += 1
 
     def on_success(self):
         """
@@ -224,36 +216,37 @@ class AdaptiveRateLimiter:
             >>> if response.status_code == 200:
             ...     limiter.on_success()
         """
-        # Track success
-        self._consecutive_successes += 1
-        self._total_successes += 1
+        with self._lock:
+            # Track success
+            self._consecutive_successes += 1
+            self._total_successes += 1
 
-        # Track fastest accepted interval (this rate worked!)
-        if self._current_interval < self._fastest_accepted:
-            self._fastest_accepted = self._current_interval
-            logger.debug(f"[{self.name}] New fastest accepted: {self._fastest_accepted:.3f}s")
+            # Track fastest accepted interval (this rate worked!)
+            if self._current_interval < self._fastest_accepted:
+                self._fastest_accepted = self._current_interval
+                logger.debug(f"[{self.name}] New fastest accepted: {self._fastest_accepted:.3f}s")
 
-        # Recalculate optimal interval if we have both boundaries
-        self._calculate_optimal()
+            # Recalculate optimal interval if we have both boundaries
+            self._calculate_optimal()
 
-        # Check if we've had enough successes to speed up
-        if self._consecutive_successes >= self.success_streak_to_speedup:
-            # If we know the optimal, move toward it; otherwise use speedup_factor
-            if self._optimal_interval and self._current_interval > self._optimal_interval:
-                # Move halfway toward optimal (binary search approach)
-                new_interval = (self._current_interval + self._optimal_interval) / 2
-            else:
-                # Standard speedup
-                new_interval = self._current_interval * self.speedup_factor
+            # Check if we've had enough successes to speed up
+            if self._consecutive_successes >= self.success_streak_to_speedup:
+                # If we know the optimal, move toward it; otherwise use speedup_factor
+                if self._optimal_interval and self._current_interval > self._optimal_interval:
+                    # Move halfway toward optimal (binary search approach)
+                    new_interval = (self._current_interval + self._optimal_interval) / 2
+                else:
+                    # Standard speedup
+                    new_interval = self._current_interval * self.speedup_factor
 
-            # Only apply if above minimum (don't go faster than allowed)
-            if new_interval >= self.min_interval:
-                self._current_interval = new_interval
-                logger.debug(f"[{self.name}] Speeding up: interval now {self._current_interval:.3f}s "
-                           f"({60/self._current_interval:.1f} req/min)")
+                # Only apply if above minimum (don't go faster than allowed)
+                if new_interval >= self.min_interval:
+                    self._current_interval = new_interval
+                    logger.debug(f"[{self.name}] Speeding up: interval now {self._current_interval:.3f}s "
+                               f"({60/self._current_interval:.1f} req/min)")
 
-            # Reset streak counter
-            self._consecutive_successes = 0
+                # Reset streak counter
+                self._consecutive_successes = 0
 
     def on_rate_limit(self, retry_after: Optional[int] = None):
         """
@@ -274,41 +267,42 @@ class AdaptiveRateLimiter:
             ...     retry = response.headers.get("Retry-After")
             ...     limiter.on_rate_limit(int(retry) if retry else None)
         """
-        # Reset success streak (we just failed)
-        self._consecutive_successes = 0
-        self._total_rate_limits += 1
+        with self._lock:
+            # Reset success streak (we just failed)
+            self._consecutive_successes = 0
+            self._total_rate_limits += 1
 
-        # Track the slowest rejected interval (this rate was too fast!)
-        # We want to know the boundary where rate limiting kicks in
-        if self._slowest_rejected == 0 or self._current_interval > self._slowest_rejected:
-            self._slowest_rejected = self._current_interval
-            logger.info(f"[{self.name}] Rate limit boundary found at {self._slowest_rejected:.3f}s")
+            # Track the slowest rejected interval (this rate was too fast!)
+            # We want to know the boundary where rate limiting kicks in
+            if self._slowest_rejected == 0 or self._current_interval > self._slowest_rejected:
+                self._slowest_rejected = self._current_interval
+                logger.info(f"[{self.name}] Rate limit boundary found at {self._slowest_rejected:.3f}s")
 
-        # Recalculate optimal interval
-        self._calculate_optimal()
+            # Recalculate optimal interval
+            self._calculate_optimal()
 
-        if retry_after:
-            # Server told us exactly how long to wait - use that
-            wait_time = retry_after
-            self._current_interval = min(retry_after, self.max_interval)
-        else:
-            # If we know the optimal, jump to it with a safety margin
-            if self._optimal_interval:
-                # Use optimal + 10% safety margin
-                self._current_interval = min(self._optimal_interval * 1.1, self.max_interval)
+            if retry_after:
+                # Server told us exactly how long to wait - use that
+                wait_time = retry_after
+                self._current_interval = min(retry_after, self.max_interval)
             else:
-                # No optimal known - use exponential backoff
-                self._current_interval = min(
-                    self._current_interval * self.backoff_factor,
-                    self.max_interval
-                )
-            wait_time = self._current_interval
+                # If we know the optimal, jump to it with a safety margin
+                if self._optimal_interval:
+                    # Use optimal + 10% safety margin
+                    self._current_interval = min(self._optimal_interval * 1.1, self.max_interval)
+                else:
+                    # No optimal known - use exponential backoff
+                    self._current_interval = min(
+                        self._current_interval * self.backoff_factor,
+                        self.max_interval
+                    )
+                wait_time = self._current_interval
 
-        # Log warning and wait
-        logger.warning(f"[{self.name}] Rate limit hit #{self._total_rate_limits}! "
-                      f"Interval: {self._current_interval:.2f}s ({60/self._current_interval:.1f} req/min). "
-                      f"Waiting {wait_time:.1f}s...")
-        time.sleep(wait_time)
+            # Log warning and wait
+            logger.warning(f"[{self.name}] Rate limit hit #{self._total_rate_limits}! "
+                          f"Interval: {self._current_interval:.2f}s ({60/self._current_interval:.1f} req/min). "
+                          f"Waiting {wait_time:.1f}s...")
+            time.sleep(wait_time)
 
     def on_error(self):
         """
@@ -322,15 +316,16 @@ class AdaptiveRateLimiter:
             >>> if response.status_code >= 500:
             ...     limiter.on_error()
         """
-        # Reset success streak
-        self._consecutive_successes = 0
+        with self._lock:
+            # Reset success streak
+            self._consecutive_successes = 0
 
-        # Moderate backoff - 1.5x slower, not as aggressive as rate limit
-        self._current_interval = min(
-            self._current_interval * 1.5,  # 50% slower
-            self.max_interval
-        )
-        logger.debug(f"[{self.name}] Error, slowing down: interval now {self._current_interval:.2f}s")
+            # Moderate backoff - 1.5x slower, not as aggressive as rate limit
+            self._current_interval = min(
+                self._current_interval * 1.5,  # 50% slower
+                self.max_interval
+            )
+            logger.debug(f"[{self.name}] Error, slowing down: interval now {self._current_interval:.2f}s")
 
     def _calculate_optimal(self):
         """

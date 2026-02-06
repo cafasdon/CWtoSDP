@@ -52,15 +52,23 @@ def setup_logger(
         console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)
     
-    # File handler
+    # File handler (Rotating)
     if log_to_file:
         log_dir = log_dir or Path("./logs")
         log_dir.mkdir(parents=True, exist_ok=True)
         
-        timestamp = datetime.now().strftime("%Y%m%d")
-        log_file = log_dir / f"cwtosdp_{timestamp}.log"
+        # Use a fixed name for rotation to work correctly
+        log_file = log_dir / "cwtosdp.log"
         
-        file_handler = logging.FileHandler(log_file, encoding="utf-8")
+        from logging.handlers import RotatingFileHandler
+        
+        # Max 5MB per file, keep 3 backup revisions
+        file_handler = RotatingFileHandler(
+            log_file, 
+            maxBytes=5*1024*1024, 
+            backupCount=3, 
+            encoding="utf-8"
+        )
         file_handler.setLevel(level)
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)

@@ -106,7 +106,7 @@ class Database:
             )
         """)
 
-        # Sync history table
+        # Sync history table (for stats)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS sync_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -115,6 +115,16 @@ class Database:
                 completed_at TEXT,
                 records_processed INTEGER DEFAULT 0,
                 status TEXT DEFAULT 'running'
+            )
+        """)
+
+        # Sync log table (for revert functionality)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sync_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sync_time TEXT NOT NULL,
+                items_json TEXT NOT NULL,
+                reverted INTEGER DEFAULT 0
             )
         """)
 
@@ -134,27 +144,41 @@ class Database:
     def store_cw_devices(self, devices: List[Dict[str, Any]]) -> int:
         """
         Store ConnectWise devices in database.
-
+        
         Args:
             devices: List of device dictionaries from CW API.
-
+            
         Returns:
             Number of devices stored.
         """
         conn = self._get_connection()
         cursor = conn.cursor()
         fetched_at = datetime.now().isoformat()
-        stored = 0
+        
+        counts = {"new": 0, "updated": 0, "total": 0}
 
         for device in devices:
             try:
+                endpoint_id = device.get("endpointId", "")
+                if not endpoint_id:
+                    continue
+
+                # Check if exists (to distinguish insert vs update)
+                cursor.execute("SELECT 1 FROM cw_devices WHERE endpoint_id = ?", (endpoint_id,))
+                exists = cursor.fetchone() is not None
+                
+                if exists:
+                    counts["updated"] += 1
+                else:
+                    counts["new"] += 1
+
                 cursor.execute("""
                     INSERT OR REPLACE INTO cw_devices
                     (endpoint_id, name, site_name, company_name, os_type, last_seen, raw_json, fetched_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    device.get("endpointId", ""),
-                    device.get("endpointName", device.get("name", "")),
+                    endpoint_id,
+                    device.get("friendlyName", device.get("endpointName", device.get("name", ""))),
                     device.get("siteName", ""),
                     device.get("companyName", ""),
                     device.get("osType", ""),
@@ -162,13 +186,13 @@ class Database:
                     json.dumps(device),
                     fetched_at
                 ))
-                stored += 1
+                counts["total"] += 1
             except Exception as e:
                 logger.warning(f"Failed to store device: {e}")
 
         conn.commit()
-        logger.info(f"Stored {stored} ConnectWise devices")
-        return stored
+        logger.info(f"Stored {counts['total']} CW devices (New: {counts['new']}, Updated: {counts['updated']})")
+        return counts['total']
 
     def get_cw_devices(self) -> List[Dict[str, Any]]:
         """Get all stored ConnectWise devices."""
@@ -193,30 +217,44 @@ class Database:
     def store_sdp_workstations(self, workstations: List[Dict[str, Any]]) -> int:
         """
         Store ServiceDesk Plus workstations in database.
-
+        
         Args:
             workstations: List of workstation dictionaries from SDP API.
-
+            
         Returns:
             Number of workstations stored.
         """
         conn = self._get_connection()
         cursor = conn.cursor()
         fetched_at = datetime.now().isoformat()
-        stored = 0
+        
+        counts = {"new": 0, "updated": 0, "total": 0}
 
         for ws in workstations:
             try:
                 # Extract CI attributes
                 ci_attrs = ws.get("ci_attributes", {})
                 model_info = ci_attrs.get("ref_model", {})
+                
+                ci_id = str(ws.get("id", ""))
+                if not ci_id:
+                    continue
+
+                # Check if exists (to distinguish insert vs update)
+                cursor.execute("SELECT 1 FROM sdp_workstations WHERE ci_id = ?", (ci_id,))
+                exists = cursor.fetchone() is not None
+                
+                if exists:
+                    counts["updated"] += 1
+                else:
+                    counts["new"] += 1
 
                 cursor.execute("""
                     INSERT OR REPLACE INTO sdp_workstations
                     (ci_id, name, serial_number, ip_address, os, manufacturer, model, raw_json, fetched_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    str(ws.get("id", "")),
+                    ci_id,
                     ws.get("name", ""),
                     ci_attrs.get("txt_serial_number", ""),
                     ci_attrs.get("txt_ip_address", ""),
@@ -226,13 +264,13 @@ class Database:
                     json.dumps(ws),
                     fetched_at
                 ))
-                stored += 1
+                counts["total"] += 1
             except Exception as e:
                 logger.warning(f"Failed to store workstation: {e}")
 
         conn.commit()
-        logger.info(f"Stored {stored} ServiceDesk Plus workstations")
-        return stored
+        logger.info(f"Stored {counts['total']} SDP workstations (New: {counts['new']}, Updated: {counts['updated']})")
+        return counts['total']
 
     def get_sdp_workstations(self) -> List[Dict[str, Any]]:
         """Get all stored ServiceDesk Plus workstations."""

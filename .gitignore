@@ -41,5 +41,11 @@ data/*
 Thumbs.db
 
 
+# Debug/test scripts (development artifacts)
+debug_*.py
+inspect_*.py
+reset_*.py
+verify_*.py
+
 # Augment agent folder
 .agent/

@@ -51,12 +51,14 @@ Or via command line:
 """
 
 import json
+import sqlite3
 import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from .db import DEFAULT_DB_PATH
 from .logger import get_logger
 from .sync_engine import SyncEngine, SyncAction, SyncItem
 
@@ -873,29 +875,27 @@ class SyncGUI:
     def _populate_fulldb_tab(self):
         """
         Populate the Full DB Comparison tab with all records from both systems.
-
+        
         Queries the database directly to get ALL records, not just sync items.
         """
-        import sqlite3
-        import json
-
         # Clear existing data
         self.fulldb_cw_tree.delete(*self.fulldb_cw_tree.get_children())
         self.fulldb_sdp_tree.delete(*self.fulldb_sdp_tree.get_children())
         self._fulldb_cw_data = []
         self._fulldb_sdp_data = []
 
+        conn = None
         try:
-            conn = sqlite3.connect("data/cwtosdp_compare.db")
+            conn = sqlite3.connect(str(DEFAULT_DB_PATH))
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-
+            
             # Build a set of matched SDP IDs from sync items
             matched_sdp_ids = set()
             matched_cw_ids = set()
             cw_to_sdp_map = {}  # cw_id -> sdp_name
             sdp_to_cw_map = {}  # sdp_id -> cw_name
-
+            
             for item in self.items:
                 if item.action == SyncAction.UPDATE and item.sdp_id:
                     matched_sdp_ids.add(str(item.sdp_id))
@@ -907,19 +907,19 @@ class SyncGUI:
             # Load ALL CW devices
             # =====================================================================
             try:
-                cursor.execute("SELECT endpointID, raw_json FROM cw_devices_full")
+                cursor.execute("SELECT endpoint_id, raw_json FROM cw_devices")
                 for row in cursor.fetchall():
-                    cw_id = row["endpointID"]
+                    cw_id = row["endpoint_id"]
                     try:
                         device = json.loads(row["raw_json"])
-                        name = device.get("friendlyName", "(no name)")
+                        name = device.get("friendlyName", device.get("name", "(no name)"))
                         serial = device.get("system", {}).get("serialNumber", "")
                         category = self._classify_device_category(device)
-
+                        
                         is_matched = cw_id in matched_cw_ids
                         matched_to = cw_to_sdp_map.get(cw_id, "") if is_matched else ""
                         status = "MATCHED" if is_matched else "UNMATCHED"
-
+                        
                         self._fulldb_cw_data.append({
                             "id": cw_id,
                             "status": status,
@@ -938,29 +938,29 @@ class SyncGUI:
             # Load ALL SDP workstations
             # =====================================================================
             try:
-                # First check which columns exist (schema may vary)
-                cursor.execute("PRAGMA table_info(sdp_workstations_full)")
+                # First check which columns exist (using sdp_workstations)
+                cursor.execute("PRAGMA table_info(sdp_workstations)")
                 available_cols = {row[1] for row in cursor.fetchall()}
-
+                
                 # Build dynamic SELECT based on available columns
-                select_cols = ["id", "name"]
-                if "ci_attributes_txt_serial_number" in available_cols:
-                    select_cols.append("ci_attributes_txt_serial_number")
-                if "ci_attributes_txt_ip_address" in available_cols:
-                    select_cols.append("ci_attributes_txt_ip_address")
-
-                cursor.execute(f"SELECT {', '.join(select_cols)} FROM sdp_workstations_full")
+                select_cols = ["ci_id", "name"]
+                if "serial_number" in available_cols:
+                    select_cols.append("serial_number")
+                if "ip_address" in available_cols:
+                    select_cols.append("ip_address")
+                    
+                cursor.execute(f"SELECT {', '.join(select_cols)} FROM sdp_workstations")
                 for row in cursor.fetchall():
-                    sdp_id = str(row["id"]) if row["id"] else ""
+                    sdp_id = str(row["ci_id"]) if row["ci_id"] else ""
                     name = row["name"] or "(no name)"
                     # Safely get optional columns
-                    serial = row["ci_attributes_txt_serial_number"] if "ci_attributes_txt_serial_number" in available_cols else ""
-                    ip = row["ci_attributes_txt_ip_address"] if "ci_attributes_txt_ip_address" in available_cols else ""
-
+                    serial = row["serial_number"] if "serial_number" in available_cols else ""
+                    ip = row["ip_address"] if "ip_address" in available_cols else ""
+                    
                     is_matched = sdp_id in matched_sdp_ids
                     matched_to = sdp_to_cw_map.get(sdp_id, "") if is_matched else ""
                     status = "MATCHED" if is_matched else "UNMATCHED"
-
+                    
                     self._fulldb_sdp_data.append({
                         "id": sdp_id,
                         "status": status,
@@ -973,14 +973,15 @@ class SyncGUI:
             except sqlite3.OperationalError as e:
                 logger.warning(f"SDP workstations table not found or error: {e}")
 
-            conn.close()
-
             # Populate trees
             self._apply_fulldb_cw_filter()
             self._apply_fulldb_sdp_filter()
 
         except Exception as e:
             logger.error(f"Error populating Full DB tab: {e}")
+        finally:
+            if conn:
+                conn.close()
 
     def _classify_device_category(self, device: dict) -> str:
         """Classify a CW device into a category (simplified version of FieldMapper)."""
@@ -1131,16 +1132,15 @@ class SyncGUI:
         Returns:
             Dictionary with 'cw_available', 'sdp_available', 'cw_count', 'sdp_count'
         """
-        import sqlite3
         result = {'cw_available': False, 'sdp_available': False, 'cw_count': 0, 'sdp_count': 0}
-
+        conn = None
         try:
-            conn = sqlite3.connect("data/cwtosdp_compare.db")
+            conn = sqlite3.connect(str(DEFAULT_DB_PATH))
             cursor = conn.cursor()
 
             # Check CW table
             try:
-                cursor.execute("SELECT COUNT(*) FROM cw_devices_full")
+                cursor.execute("SELECT COUNT(*) FROM cw_devices")
                 result['cw_count'] = cursor.fetchone()[0]
                 result['cw_available'] = result['cw_count'] > 0
             except sqlite3.OperationalError:
@@ -1148,15 +1148,16 @@ class SyncGUI:
 
             # Check SDP table
             try:
-                cursor.execute("SELECT COUNT(*) FROM sdp_workstations_full")
+                cursor.execute("SELECT COUNT(*) FROM sdp_workstations")
                 result['sdp_count'] = cursor.fetchone()[0]
                 result['sdp_available'] = result['sdp_count'] > 0
             except sqlite3.OperationalError:
                 pass
-
-            conn.close()
         except Exception as e:
             logger.warning(f"Error checking data availability: {e}")
+        finally:
+            if conn:
+                conn.close()
 
         return result
 
@@ -1169,8 +1170,6 @@ class SyncGUI:
         2. Partial data (CW only or SDP only): Shows available data without matching
         3. Both available: Runs full sync preview with matching logic
         """
-        import sqlite3
-
         # Check what data is available
         availability = self._check_data_availability()
         cw_available = availability['cw_available']
@@ -1236,49 +1235,51 @@ class SyncGUI:
         When only CW data is available, shows all devices as pending (no matching possible).
         When only SDP data is available, shows info message (nothing to sync from).
         """
-        import sqlite3
-        import json
         from .field_mapper import FieldMapper
 
         items = []
 
         if cw_available and not sdp_available:
             # CW data only - show devices as CREATE (pending SDP data for matching)
-            conn = sqlite3.connect("data/cwtosdp_compare.db")
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
+            conn = None
+            try:
+                conn = sqlite3.connect(str(DEFAULT_DB_PATH))
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
 
-            cursor.execute("SELECT endpointID, raw_json FROM cw_devices_full")
-            for row in cursor.fetchall():
-                try:
-                    cw_id = row["endpointID"]
-                    device = json.loads(row["raw_json"])
+                cursor.execute("SELECT endpoint_id, raw_json FROM cw_devices")
+                for row in cursor.fetchall():
+                    try:
+                        cw_id = row["endpoint_id"]
+                        device = json.loads(row["raw_json"])
 
-                    # Use FieldMapper to classify and map fields
-                    mapper = FieldMapper(device)
-                    sdp_data = mapper.get_sdp_data()
-                    category = sdp_data.pop("_category")
+                        # Use FieldMapper to classify and map fields
+                        mapper = FieldMapper(device)
+                        sdp_data = mapper.get_sdp_data()
+                        category = sdp_data.pop("_category")
 
-                    # Determine target SDP CI type
-                    sdp_ci_type = self.engine.CI_TYPE_MAP.get(category, "ci_windows_workstation")
+                        # Determine target SDP CI type
+                        sdp_ci_type = self.engine.CI_TYPE_MAP.get(category, "ci_windows_workstation")
 
-                    # All items are CREATE since we can't match without SDP data
-                    item = SyncItem(
-                        cw_id=cw_id,
-                        cw_name=device.get("friendlyName", ""),
-                        cw_category=category,
-                        sdp_ci_type=sdp_ci_type,
-                        action=SyncAction.CREATE,
-                        fields_to_sync=sdp_data,
-                        sdp_existing_fields={},
-                        match_reason="Pending SDP data for matching",
-                    )
-                    items.append(item)
-                except Exception as e:
-                    logger.warning(f"Error processing CW device: {e}")
+                        # All items are CREATE since we can't match without SDP data
+                        item = SyncItem(
+                            cw_id=cw_id,
+                            cw_name=device.get("friendlyName", ""),
+                            cw_category=category,
+                            sdp_ci_type=sdp_ci_type,
+                            action=SyncAction.CREATE,
+                            fields_to_sync=sdp_data,
+                            sdp_existing_fields={},
+                            match_reason="Pending SDP data for matching",
+                        )
+                        items.append(item)
+                    except Exception as e:
+                        logger.warning(f"Error processing CW device: {e}")
 
-            conn.close()
-            logger.info(f"Loaded {len(items)} CW devices (SDP data pending for matching)")
+                logger.info(f"Loaded {len(items)} CW devices (SDP data pending for matching)")
+            finally:
+                if conn:
+                    conn.close()
 
         elif sdp_available and not cw_available:
             # SDP data only - nothing to show (sync is CW → SDP)
@@ -1856,29 +1857,31 @@ class SyncGUI:
 
     def _save_sync_log(self, created_ids: List[Dict]):
         """Save sync log to database for revert capability."""
-        import sqlite3
-        import json
         from datetime import datetime
 
-        conn = sqlite3.connect("data/cwtosdp_compare.db")
-        cursor = conn.cursor()
+        conn = None
+        try:
+            conn = sqlite3.connect(str(DEFAULT_DB_PATH))
+            cursor = conn.cursor()
 
-        # Create sync_log table if not exists
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS sync_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                sync_time TEXT,
-                items_json TEXT,
-                reverted INTEGER DEFAULT 0
+            # Create sync_log table if not exists
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS sync_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    sync_time TEXT,
+                    items_json TEXT,
+                    reverted INTEGER DEFAULT 0
+                )
+            """)
+
+            cursor.execute(
+                "INSERT INTO sync_log (sync_time, items_json) VALUES (?, ?)",
+                (datetime.now().isoformat(), json.dumps(created_ids))
             )
-        """)
-
-        cursor.execute(
-            "INSERT INTO sync_log (sync_time, items_json) VALUES (?, ?)",
-            (datetime.now().isoformat(), json.dumps(created_ids))
-        )
-        conn.commit()
-        conn.close()
+            conn.commit()
+        finally:
+            if conn:
+                conn.close()
 
         # Enable revert button
         self.root.after(0, lambda: self.revert_btn.config(state=tk.NORMAL))
@@ -1907,15 +1910,16 @@ class SyncGUI:
         self.sync_in_progress = False
         self._on_real_sync_toggle()  # Reset button text
 
-        # Update progress window with summary
-        if is_dry_run:
-            self.progress_label.config(text=f"Preview complete: {success} would be created, {errors} would fail")
-        else:
-            self.progress_label.config(text=f"Complete: {success} created, {errors} errors")
+        # Update progress window with summary (guard against closed window)
+        if hasattr(self, 'progress_win') and self.progress_win.winfo_exists():
+            if is_dry_run:
+                self.progress_label.config(text=f"Preview complete: {success} would be created, {errors} would fail")
+            else:
+                self.progress_label.config(text=f"Complete: {success} created, {errors} errors")
 
-        # Add close button
-        ttk.Button(self.progress_win, text="Close",
-                   command=self.progress_win.destroy).pack(pady=10)
+            # Add close button
+            ttk.Button(self.progress_win, text="Close",
+                       command=self.progress_win.destroy).pack(pady=10)
 
         # Create/update results tab
         if results:
@@ -2032,41 +2036,37 @@ class SyncGUI:
 
     def _revert_sync(self):
         """Revert the last sync operation."""
-        import sqlite3
-        import json
-
-        # Get last sync log
-        conn = sqlite3.connect("data/cwtosdp_compare.db")
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            SELECT id, sync_time, items_json FROM sync_log
-            WHERE reverted = 0 ORDER BY id DESC LIMIT 1
-        """)
-        row = cursor.fetchone()
-
-        if not row:
-            messagebox.showinfo("No Sync to Revert", "No previous sync operations found to revert.")
-            conn.close()
-            return
-
-        log_id, sync_time, items_json = row
-        items = json.loads(items_json)
-
-        msg = f"Revert sync from {sync_time}?\n\n"
-        msg += f"This will DELETE {len(items)} items from SDP:\n"
-        for item in items[:5]:
-            msg += f"  • {item['name']}\n"
-        if len(items) > 5:
-            msg += f"  ... and {len(items) - 5} more\n"
-
-        if not messagebox.askyesno("Confirm Revert", msg):
-            conn.close()
-            return
-
-        # Execute revert
-        from .sdp_client import SDPClient
+        conn = None
         try:
+            # Get last sync log
+            conn = sqlite3.connect(str(DEFAULT_DB_PATH))
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                SELECT id, sync_time, items_json FROM sync_log
+                WHERE reverted = 0 ORDER BY id DESC LIMIT 1
+            """)
+            row = cursor.fetchone()
+
+            if not row:
+                messagebox.showinfo("No Sync to Revert", "No previous sync operations found to revert.")
+                return
+
+            log_id, sync_time, items_json = row
+            items = json.loads(items_json)
+
+            msg = f"Revert sync from {sync_time}?\n\n"
+            msg += f"This will DELETE {len(items)} items from SDP:\n"
+            for item in items[:5]:
+                msg += f"  • {item['name']}\n"
+            if len(items) > 5:
+                msg += f"  ... and {len(items) - 5} more\n"
+
+            if not messagebox.askyesno("Confirm Revert", msg):
+                return
+
+            # Execute revert
+            from .sdp_client import SDPClient
             sdp = SDPClient(dry_run=False)
             success = 0
             for item in items:
@@ -2087,7 +2087,8 @@ class SyncGUI:
         except Exception as e:
             messagebox.showerror("Revert Error", f"Failed to revert: {e}")
         finally:
-            conn.close()
+            if conn:
+                conn.close()
 
     def _refresh_cw_data(self):
         """Refresh ConnectWise data with progress dialog."""
@@ -2160,6 +2161,18 @@ class SyncGUI:
             self.cw_progress_label.config(text=status)
             self.cw_status_label.config(text=detail)
 
+    def _monitor_rate_limit(self):
+        """Periodically update rate limit stats independent of fetch loop."""
+        if hasattr(self, 'cw_progress_win') and self.cw_progress_win.winfo_exists() and self._cw_client:
+            try:
+                status = self._cw_client.rate_limiter.get_status_line()
+                # Update status label directly
+                self.cw_status_label.config(text=status)
+            except Exception:
+                pass
+            # Schedule next update in 500ms
+            self.root.after(500, self._monitor_rate_limit)
+
     def _add_to_cw_feed(self, device_name: str, device_type: str):
         """Add a fetched device to the live feed display."""
         if hasattr(self, 'cw_progress_win') and self.cw_progress_win.winfo_exists():
@@ -2184,21 +2197,21 @@ class SyncGUI:
     def _do_refresh_cw(self):
         """
         Background thread for CW refresh with incremental fetch.
-
-        Optimization features:
-        - Only fetches endpoints that are missing or have incomplete data
-        - Stores each endpoint immediately after fetch (resume on cancel)
-        - Shows progress: "X need fetch, Y already complete"
+        Refactored to use standard Database class and cw_devices table.
         """
         try:
             from .cw_client import ConnectWiseClient
             from .config import load_config
-            from .db_compare import CompareDatabase
+            from .db import Database
 
             # Load config and create client
             config = load_config()
             self._cw_client = ConnectWiseClient(config.connectwise)
-            db = CompareDatabase()
+            db = Database()
+            
+            # Use raw connection for checking existence (efficient check)
+            conn = db._get_connection()
+            cursor = conn.cursor()
 
             # Fetch basic endpoint list first
             self.root.after(0, lambda: self._update_cw_progress(0, 100, "Fetching endpoint list...", ""))
@@ -2210,8 +2223,16 @@ class SyncGUI:
             # Check which endpoints need detailed fetch (incremental)
             self.root.after(0, lambda: self._update_cw_progress(0, 100,
                 "Checking for existing data...", "Optimizing API calls"))
-            all_endpoint_ids = [ep.get("endpointId") for ep in endpoints if ep.get("endpointId")]
-            incomplete_ids = set(db.get_incomplete_cw_endpoints(all_endpoint_ids))
+            
+            # Get existing endpoint IDs from cw_devices
+            cursor.execute("SELECT endpoint_id FROM cw_devices")
+            existing_ids = {row[0] for row in cursor.fetchall()}
+            
+            incomplete_ids = []
+            for ep in endpoints:
+                ep_id = ep.get("endpointId")
+                if ep_id and ep_id not in existing_ids:
+                    incomplete_ids.append(ep_id)
 
             already_complete = total_endpoints - len(incomplete_ids)
             need_fetch = len(incomplete_ids)
@@ -2227,57 +2248,63 @@ class SyncGUI:
 
             logger.info(f"Incremental fetch: {already_complete} complete, {need_fetch} need fetch")
 
-            # Fetch detailed information for incomplete endpoints only
+            # Start rate monitor
+            self.root.after(100, self._monitor_rate_limit)
+
+            # Parallel Execution
+            import concurrent.futures
+            max_workers = 5
+            
             fetched = 0
-            for i, endpoint in enumerate(endpoints, 1):
-                # Check for cancellation
-                if self._cw_cancelled:
-                    db.close()
-                    self.root.after(0, self._cw_refresh_cancelled)
-                    return
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # Submit tasks
+                future_to_ep = {
+                    executor.submit(self._cw_client.get_endpoint_details, ep["endpointId"]): ep 
+                    for ep in endpoints 
+                    if ep.get("endpointId") and ep.get("endpointId") not in existing_ids
+                }
+                
+                for future in concurrent.futures.as_completed(future_to_ep):
+                    if self._cw_cancelled:
+                        break
+                        
+                    ep = future_to_ep[future]
+                    fetched += 1
+                    
+                    # Update progress bar only (rate limit is handled by monitor)
+                    status = f"Fetching {fetched} of {need_fetch} (skipped {already_complete} complete)"
+                    self.root.after(0, lambda f=fetched, n=need_fetch, s=status:
+                                    self._update_cw_progress(f, n, s, ""))
 
-                endpoint_id = endpoint.get("endpointId")
-                if not endpoint_id:
-                    logger.warning(f"Endpoint missing endpointId: {endpoint}")
-                    continue
+                    try:
+                        details = future.result()
+                        
+                        # Store
+                        # Ensure endpointId is present (API detail view might omit it)
+                        if "endpointId" not in details:
+                            details["endpointId"] = ep["endpointId"]
+                        db.store_cw_devices([details])
+                        
+                        # Feed
+                        d_name = details.get("friendlyName", ep.get("endpointId", "")[:20])
+                        d_type = details.get("endpointType", "Unknown")
+                        self.root.after(0, lambda n=d_name, t=d_type: self._add_to_cw_feed(n, t))
 
-                # Skip if already complete
-                if endpoint_id not in incomplete_ids:
-                    continue
-
-                # Update progress with rate limiter status
-                fetched += 1
-                status = f"Fetching {fetched} of {need_fetch} (skipped {already_complete} complete)"
-                rate_status = self._cw_client.rate_limiter.get_status_line()
-                self.root.after(0, lambda f=fetched, n=need_fetch, s=status, d=rate_status:
-                                self._update_cw_progress(f, n, s, d))
-
-                try:
-                    # Fetch full details for this endpoint
-                    details = self._cw_client.get_endpoint_details(endpoint_id)
-
-                    # Store immediately (so cancelled refreshes still save progress)
-                    db.store_cw_device_single(details, endpoint_id)
-
-                    # Add to live feed - extract device name and type
-                    device_name = details.get("friendlyName", endpoint_id[:20])
-                    device_type = details.get("endpointType", "Unknown")
-                    self.root.after(0, lambda n=device_name, t=device_type:
-                                    self._add_to_cw_feed(n, t))
-
-                except Exception as e:
-                    if "cancelled" in str(e).lower():
-                        db.close()
-                        self.root.after(0, self._cw_refresh_cancelled)
-                        return
-                    # Log failure but continue with other endpoints
-                    logger.warning(f"Failed to fetch details for {endpoint_id}: {e}")
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch {ep.get('endpointId')}: {e}")
 
             db.close()
+            
+            if self._cw_cancelled:
+                self.root.after(0, self._cw_refresh_cancelled)
+                return
 
-            # Final count of complete endpoints
-            final_db = CompareDatabase()
-            final_count = final_db.get_cw_endpoint_count()
+            # Final count
+            final_db = Database()
+            conn = final_db._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM cw_devices")
+            final_count = cursor.fetchone()[0]
             final_db.close()
 
             logger.info(f"CW refresh complete: {final_count} endpoints with full data")
@@ -2405,28 +2432,29 @@ class SyncGUI:
     def _do_refresh_sdp(self):
         """
         Background thread for SDP refresh with incremental fetch optimization.
-
-        Features:
-        - Shows progress dialog with live feed
-        - Supports cancellation
-        - Uses adaptive rate limiting
-        - INCREMENTAL: Only stores new records (skips existing)
-        - Shows "X new, Y already in DB (skipped)"
+        Refactored to use standard Database class and sdp_workstations table.
         """
         try:
             from .sdp_client import ServiceDeskPlusClient
             from .config import load_sdp_config
-            from .db_compare import CompareDatabase
+            from .db import Database
 
             # Load config and create client
             config = load_sdp_config()
             self._sdp_client = ServiceDeskPlusClient(config)
-            db = CompareDatabase()
+            db = Database()
+            
+            # Use raw connection for checking existence
+            conn = db._get_connection()
+            cursor = conn.cursor()
 
             # INCREMENTAL: Get existing IDs from database first
             self.root.after(0, lambda: self._update_sdp_progress(0, 100,
                 "Checking existing data...", "Optimizing API calls"))
-            existing_ids = db.get_existing_sdp_ids()
+            
+            cursor.execute("SELECT ci_id FROM sdp_workstations")
+            existing_ids = {str(row[0]) for row in cursor.fetchall()}
+            
             already_have = len(existing_ids)
             logger.info(f"Found {already_have} existing SDP workstations in database")
 
@@ -2470,27 +2498,21 @@ class SyncGUI:
                 self.root.after(0, self._sdp_refresh_cancelled)
                 return
 
-            # INCREMENTAL: Only store NEW records (not already in database)
+            # Store ALL records to ensure we have fresh data (updates handled by DB)
             self.root.after(0, lambda: self._update_sdp_progress(100, 100,
-                f"Storing {new_count} new records (skipping {skipped_count} existing)...", ""))
+                f"Storing {len(workstations)} records...", ""))
+            
             stored = 0
-            for ws in workstations:
-                ws_id = str(ws.get("id", ""))
-                if ws_id and ws_id not in existing_ids:
-                    # This is a new record - store it
-                    if db.store_sdp_workstation_single(ws, ws_id):
-                        stored += 1
+            if workstations:
+                stored = db.store_sdp_workstations(workstations)
 
             db.close()
-            logger.info(f"Stored {stored} new SDP workstations (skipped {skipped_count} existing)")
+            logger.info(f"Stored {stored} SDP workstations (Total fetched: {len(workstations)})")
             self.root.after(0, lambda: self._sdp_refresh_done_incremental(stored, skipped_count))
 
         except Exception as e:
-            if "cancelled" in str(e).lower():
-                self.root.after(0, self._sdp_refresh_cancelled)
-            else:
-                logger.error(f"SDP refresh failed: {e}")
-                self.root.after(0, lambda: self._sdp_refresh_error(str(e)))
+            logger.error(f"SDP refresh failed: {e}")
+            self.root.after(0, lambda: self._sdp_refresh_error(str(e)))
 
     def _sdp_refresh_done(self, count: int):
         """Handle successful SDP refresh completion."""
@@ -2542,42 +2564,46 @@ class SyncGUI:
 
     def _check_orphans(self):
         """Check for orphaned entries and database status."""
-        import sqlite3
-
-        conn = sqlite3.connect("data/cwtosdp_compare.db")
-        cursor = conn.cursor()
-
-        # Get counts (handle missing tables on first run)
+        conn = None
         cw_count = 0
         sdp_count = 0
-        try:
-            cursor.execute("SELECT COUNT(*) FROM cw_devices_full")
-            cw_count = cursor.fetchone()[0]
-        except sqlite3.OperationalError:
-            pass  # Table doesn't exist yet
-
-        try:
-            cursor.execute("SELECT COUNT(*) FROM sdp_workstations_full")
-            sdp_count = cursor.fetchone()[0]
-        except sqlite3.OperationalError:
-            pass  # Table doesn't exist yet
-
-        # Check for sync log entries
         pending_syncs = 0
-        try:
-            cursor.execute("SELECT COUNT(*) FROM sync_log WHERE reverted = 0")
-            result = cursor.fetchone()
-            pending_syncs = result[0] if result else 0
-        except sqlite3.OperationalError:
-            pass  # Table doesn't exist yet
-
-        # Check fetch tracker
         fetch_info = []
+
         try:
-            cursor.execute("SELECT source, last_fetch, total_fetched FROM fetch_tracker")
-            fetch_info = cursor.fetchall()
-        except sqlite3.OperationalError:
-            pass  # Table doesn't exist yet
+            conn = sqlite3.connect(str(DEFAULT_DB_PATH))
+            cursor = conn.cursor()
+
+            # Get counts (handle missing tables on first run)
+            try:
+                cursor.execute("SELECT COUNT(*) FROM cw_devices")
+                cw_count = cursor.fetchone()[0]
+            except sqlite3.OperationalError:
+                pass  # Table doesn't exist yet
+
+            try:
+                cursor.execute("SELECT COUNT(*) FROM sdp_workstations")
+                sdp_count = cursor.fetchone()[0]
+            except sqlite3.OperationalError:
+                pass  # Table doesn't exist yet
+
+            # Check for sync log entries
+            try:
+                cursor.execute("SELECT COUNT(*) FROM sync_log WHERE reverted = 0")
+                result = cursor.fetchone()
+                pending_syncs = result[0] if result else 0
+            except sqlite3.OperationalError:
+                pass  # Table doesn't exist yet
+
+            # Check fetch tracker
+            try:
+                cursor.execute("SELECT source, last_fetch, total_fetched FROM fetch_tracker")
+                fetch_info = cursor.fetchall()
+            except sqlite3.OperationalError:
+                pass  # Table doesn't exist yet
+        finally:
+            if conn:
+                conn.close()
 
         # Check for orphaned CW entries (not in current API response)
         # This would require comparing with a fresh API call - for now show what we have
@@ -2585,8 +2611,6 @@ class SyncGUI:
         # Check matches vs creates
         create_count = len([i for i in self.items if i.action == SyncAction.CREATE])
         update_count = len([i for i in self.items if i.action == SyncAction.UPDATE])
-
-        conn.close()
 
         # Show results in popup
         win = tk.Toplevel(self.root)
@@ -3305,7 +3329,7 @@ COMMON ISSUES:
 LOG FILES
 ─────────────────────────────────────────────────────────
 
-Application logs: logs/cwtosdp_YYYYMMDD.log
+Application logs: logs/cwtosdp.log (rotates at 5MB, 3 backups)
 Sync results:     logs/sync_results_*.json
 
 Log levels:

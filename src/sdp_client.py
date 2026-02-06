@@ -51,6 +51,7 @@ Usage Example:
 """
 
 import time
+import threading
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -167,6 +168,9 @@ class ServiceDeskPlusClient:
             speedup_factor=0.9,    # Speed up by 10% after success streak
             success_streak_to_speedup=5  # Need 5 successes to speed up
         )
+        
+        # Thread lock for token management
+        self._lock = threading.RLock()
 
     # =========================================================================
     # CANCELLATION SUPPORT
@@ -207,8 +211,9 @@ class ServiceDeskPlusClient:
             SDP uses "Zoho-oauthtoken" prefix instead of "Bearer"
         """
         # Check if we need to get/refresh token
-        if not self._access_token or self._is_token_expired():
-            self.refresh_access_token()
+        with self._lock:
+            if not self._access_token or self._is_token_expired():
+                self.refresh_access_token()
 
         return {
             # SDP uses Zoho-specific OAuth header format
@@ -372,8 +377,9 @@ class ServiceDeskPlusClient:
                     # Unauthorized - token probably expired
                     # Clear token and refresh, then retry
                     logger.warning("Token expired, refreshing...")
-                    self._access_token = None
-                    self.refresh_access_token()
+                    with self._lock:
+                        self._access_token = None
+                        self.refresh_access_token()
                     self.rate_limiter.on_error()
                     continue  # Retry with new token
                 elif resp.status_code == 429:

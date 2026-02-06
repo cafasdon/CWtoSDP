@@ -43,6 +43,7 @@ Usage Example:
 """
 
 import time
+import threading
 from typing import Any, Dict, List, Optional
 
 import requests  # HTTP library for making API calls
@@ -146,6 +147,9 @@ class ConnectWiseClient:
             speedup_factor=0.85,   # Speed up by 15% after success streak
             success_streak_to_speedup=3  # Need 3 successes to speed up
         )
+        
+        # Thread lock for authentication
+        self._lock = threading.RLock()
 
     def cancel(self):
         """Cancel any ongoing operations. Thread-safe."""
@@ -175,8 +179,9 @@ class ConnectWiseClient:
             Dictionary with Authorization and Accept headers
         """
         # Lazy authentication - only authenticate when needed
-        if not self._access_token:
-            self.authenticate()
+        with self._lock:
+            if not self._access_token:
+                self.authenticate()
 
         return {
             "Authorization": f"Bearer {self._access_token}",  # OAuth2 Bearer token
@@ -319,8 +324,10 @@ class ConnectWiseClient:
                     # Unauthorized - token probably expired
                     # Clear token and re-authenticate, then retry
                     logger.warning("Token expired, re-authenticating...")
-                    self._access_token = None
-                    self.authenticate()
+                    with self._lock:
+                        # Double-check inside lock to ensure another thread didn't just refresh it
+                        self._access_token = None
+                        self.authenticate()
                     continue  # Retry with new token
 
                 elif resp.status_code == 429:
@@ -357,79 +364,122 @@ class ConnectWiseClient:
     def get_devices(self) -> List[Dict[str, Any]]:
         """
         Get all device endpoints from ConnectWise.
-
-        This is the main method for retrieving devices/computers managed
-        by ConnectWise RMM. Returns all endpoints the API credentials
-        have access to.
-
-        Each device dictionary contains:
-        - endpointId: Unique identifier for the device
-        - friendlyName: Computer/device name
-        - endpointType: "Desktop", "Server", or "NetworkDevice"
-        - system: Object with serial number, model, manufacturer
-        - os: Object with OS name and version
-        - networks: Array of network adapters with IP/MAC
-        - lastContactedAt: Last time device contacted CW servers
-        - And many more fields...
-
-        Returns:
-            List of device dictionaries, each representing a CW endpoint
-
-        Raises:
-            ConnectWiseClientError: If API call fails or response is malformed
-
-        Example:
-            >>> devices = client.get_devices()
-            >>> for device in devices:
-            ...     print(f"{device['friendlyName']}: {device['endpointType']}")
+        Handles pagination automatically to retrieve all devices.
         """
-        logger.info("Fetching devices from ConnectWise...")
-
-        # Make API call to endpoints list
-        data = self._make_request("GET", "/api/platform/v1/device/endpoints")
-
-        # Response should be {"endpoints": [...]}
-        if isinstance(data, dict) and "endpoints" in data:
-            devices = data["endpoints"]
-            logger.info(f"Retrieved {len(devices)} devices")
-            return devices
-
-        # Unexpected response format
-        raise ConnectWiseClientError("Unexpected response format: 'endpoints' key missing")
+        logger.info("Fetching devices from ConnectWise (with pagination)...")
+        
+        all_devices = []
+        page = 1
+        page_size = 1000  # Maximize page size to reduce requests
+        
+        while True:
+            # Check cancellation
+            if self._cancelled:
+                logger.info("ConnectWise fetch cancelled")
+                break
+                
+            logger.debug(f"Fetching device page {page}...")
+            
+            # Make API call with pagination params
+            params = {"page": page, "pageSize": page_size}
+            data = self._make_request("GET", "/api/platform/v1/device/endpoints", params=params)
+            
+            if not isinstance(data, list):
+                # Older API versions returned {"endpoints": [...]}
+                # Newer versions typically return a list directly for this endpoint type
+                # but we handle both just in case
+                if isinstance(data, dict) and "endpoints" in data:
+                    page_items = data["endpoints"]
+                else:
+                    logger.warning("Unexpected response format (not list), stopping fetch")
+                    break
+            else:
+                page_items = data
+                
+            if not page_items:
+                break
+                
+            all_devices.extend(page_items)
+            logger.info(f"Page {page}: Retrieved {len(page_items)} devices")
+            
+            # If we got fewer items than page_size, we're done
+            if len(page_items) < page_size:
+                break
+                
+            page += 1
+            
+        logger.info(f"Total devices retrieved: {len(all_devices)}")
+        return all_devices
 
     def get_sites(self) -> List[Dict[str, Any]]:
         """
         Get all sites from ConnectWise.
-
-        Sites represent physical locations (offices, branches, etc.)
-        that are associated with client companies.
-
-        Returns:
-            List of site dictionaries with name, address, etc.
+        Handles pagination automatically.
         """
-        logger.info("Fetching sites from ConnectWise...")
-        data = self._make_request("GET", "/api/platform/v1/company/sites")
-        # Handle both list response and {"sites": [...]} format
-        sites = data if isinstance(data, list) else data.get("sites", [])
-        logger.info(f"Retrieved {len(sites)} sites")
-        return sites
+        logger.info("Fetching sites from ConnectWise (with pagination)...")
+        
+        all_sites = []
+        page = 1
+        page_size = 1000
+        
+        while True:
+            if self._cancelled:
+                break
+                
+            params = {"page": page, "pageSize": page_size}
+            data = self._make_request("GET", "/api/platform/v1/company/sites", params=params)
+            
+            # Sites endpoint usually returns list directly
+            page_items = data if isinstance(data, list) else data.get("sites", [])
+            
+            if not page_items:
+                break
+                
+            all_sites.extend(page_items)
+            logger.info(f"Page {page}: Retrieved {len(page_items)} sites")
+            
+            if len(page_items) < page_size:
+                break
+                
+            page += 1
+            
+        logger.info(f"Total sites retrieved: {len(all_sites)}")
+        return all_sites
 
     def get_companies(self) -> List[Dict[str, Any]]:
         """
         Get all companies (clients) from ConnectWise.
-
-        Companies represent client organizations that are managed
-        through ConnectWise.
-
-        Returns:
-            List of company dictionaries with name, details, etc.
+        Handles pagination automatically.
         """
-        logger.info("Fetching companies from ConnectWise...")
-        data = self._make_request("GET", "/api/platform/v1/company/companies")
-        # Handle both list response and {"companies": [...]} format
-        companies = data if isinstance(data, list) else data.get("companies", [])
-        logger.info(f"Retrieved {len(companies)} companies")
-        return companies
+        logger.info("Fetching companies from ConnectWise (with pagination)...")
+        
+        all_companies = []
+        page = 1
+        page_size = 1000
+        
+        while True:
+            if self._cancelled:
+                break
+                
+            params = {"page": page, "pageSize": page_size}
+            data = self._make_request("GET", "/api/platform/v1/company/companies", params=params)
+            
+            # Companies endpoint usually returns list directly
+            page_items = data if isinstance(data, list) else data.get("companies", [])
+            
+            if not page_items:
+                break
+                
+            all_companies.extend(page_items)
+            logger.info(f"Page {page}: Retrieved {len(page_items)} companies")
+            
+            if len(page_items) < page_size:
+                break
+                
+            page += 1
+            
+        logger.info(f"Total companies retrieved: {len(all_companies)}")
+        return all_companies
 
     def get_endpoint_details(self, endpoint_id: str) -> Dict[str, Any]:
         """

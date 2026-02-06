@@ -65,9 +65,10 @@ from enum import Enum
 
 from .field_mapper import FieldMapper, DeviceClassifier
 
-# Default path to the comparison database
-# This database contains cached data from both CW and SDP APIs
-DB_PATH = Path("data/cwtosdp_compare.db")
+# Default path to the main database
+# This database contains fresh data from CW and SDP APIs
+from .db import DEFAULT_DB_PATH
+DB_PATH = DEFAULT_DB_PATH
 
 
 # =============================================================================
@@ -217,7 +218,7 @@ class SyncEngine:
 
         Args:
             db_path: Path to the SQLite database file.
-                    Defaults to data/cwtosdp_compare.db
+                    Defaults to data/cwtosdp.db
         """
         # Connect to SQLite database
         self.conn = sqlite3.connect(db_path)
@@ -235,48 +236,67 @@ class SyncEngine:
     def build_sync_preview(self) -> List[SyncItem]:
         """
         Build a preview of all sync operations.
-
-        This method:
-        1. Reads all CW devices from the database
-        2. For each device, classifies it and maps fields
-        3. Tries to find a matching SDP record
-        4. Creates a SyncItem with CREATE or UPDATE action
-
-        Returns:
-            List of SyncItem objects, one per CW device
-
-        Note:
-            This does NOT execute any sync operations. It only builds
-            the plan for user review.
+        
+        Optimized implementation:
+        1. Pre-loads all SDP workstations into memory lookup maps (O(1) access)
+        2. Iterates CW devices and matches against maps
+        3. Eliminates N+1 DB query problem
         """
         items = []
         cursor = self.conn.cursor()
 
-        # Get all CW devices from the database
-        # The raw_json column contains the full API response
-        cursor.execute("SELECT endpointID, raw_json FROM cw_devices_full")
+        # =====================================================================
+        # PRE-LOAD SDP DATA FOR LOOKUP (Performance Optimization)
+        # =====================================================================
+        sdp_lookup_name = {}
+        sdp_lookup_serial = {}
+        
+        try:
+            # Use main DB table 'sdp_workstations'
+            cursor.execute("SELECT * FROM sdp_workstations")
+            sdp_rows = cursor.fetchall()
+            
+            for row in sdp_rows:
+                # Build Hostname Lookup
+                if row["name"]:
+                    sdp_lookup_name[row["name"].upper()] = row
+                    
+                # Build Serial Lookup (skip empty or VM serials)
+                serial = row["serial_number"]
+                if serial and "VMWARE" not in serial.upper() and "VIRTUAL" not in serial.upper():
+                    sdp_lookup_serial[serial.upper()] = row
+                    
+        except sqlite3.OperationalError:
+            # Table might not exist if SDP fetch hasn't run yet
+            pass
 
+        # =====================================================================
+        # PROCESS CONNECTWISE DEVICES
+        # =====================================================================
+        
+        # Get all CW devices from the main DB table 'cw_devices'
+        cursor.execute("SELECT endpoint_id, raw_json FROM cw_devices")
+        
         for row in cursor.fetchall():
             # Extract device data
-            cw_id = row["endpointID"]
+            cw_id = row["endpoint_id"]
             device = json.loads(row["raw_json"])
 
             # Use FieldMapper to classify and map fields
             mapper = FieldMapper(device)
             sdp_data = mapper.get_sdp_data()
 
-            # Extract category (stored as _category in sdp_data)
+            # Extract category
             category = sdp_data.pop("_category")
 
             # Determine target SDP CI type
             sdp_ci_type = self.CI_TYPE_MAP.get(category, "ci_windows_workstation")
 
-            # Try to find matching SDP record
-            match = self._find_sdp_match(device, sdp_ci_type)
+            # Try to find matching SDP record using in-memory lookups
+            match = self._find_sdp_match_optimized(device, sdp_lookup_name, sdp_lookup_serial)
 
             if match:
                 # Match found → UPDATE action
-                # Unpack all 4 values: id, name, reason, and existing fields
                 sdp_id, sdp_name, match_reason, existing_fields = match
                 item = SyncItem(
                     cw_id=cw_id,
@@ -287,11 +307,11 @@ class SyncEngine:
                     sdp_id=sdp_id,
                     sdp_name=sdp_name,
                     fields_to_sync=sdp_data,
-                    sdp_existing_fields=existing_fields,  # Store existing SDP values
+                    sdp_existing_fields=existing_fields,
                     match_reason=match_reason,
                 )
             else:
-                # No match → CREATE action (no existing fields)
+                # No match → CREATE action
                 item = SyncItem(
                     cw_id=cw_id,
                     cw_name=device.get("friendlyName", ""),
@@ -299,7 +319,7 @@ class SyncEngine:
                     sdp_ci_type=sdp_ci_type,
                     action=SyncAction.CREATE,
                     fields_to_sync=sdp_data,
-                    sdp_existing_fields={},  # Empty - nothing exists yet
+                    sdp_existing_fields={},
                     match_reason="No match found",
                 )
 
@@ -311,94 +331,60 @@ class SyncEngine:
     # MATCHING LOGIC
     # =========================================================================
 
-    def _find_sdp_match(self, cw_device: Dict, sdp_ci_type: str) -> Optional[Tuple[str, str, str, Dict[str, Any]]]:
+    def _find_sdp_match_optimized(
+        self, 
+        cw_device: Dict, 
+        lookup_name: Dict[str, Any], 
+        lookup_serial: Dict[str, Any]
+    ) -> Optional[Tuple[str, str, str, Dict[str, Any]]]:
         """
-        Find a matching SDP record for a ConnectWise device.
-
-        Matching is attempted in this order:
-        1. Hostname match (case-insensitive)
-        2. Serial number match (if not a VM serial)
-
+        Find a matching SDP record using in-memory lookups.
+        
         Args:
-            cw_device: ConnectWise device dictionary
-            sdp_ci_type: Target SDP CI type (currently unused, but could
-                        be used to search different CI tables)
-
+            cw_device: CW device dictionary
+            lookup_name: Dictionary mapping UPPER(hostname) -> row
+            lookup_serial: Dictionary mapping UPPER(serial) -> row
+            
         Returns:
-            Tuple of (sdp_id, sdp_name, match_reason, existing_fields) if match found
-            None if no match found
-
-            existing_fields contains the current SDP values for comparison
+            Tuple match data or None
         """
-        import sqlite3
-        cursor = self.conn.cursor()
-
-        # Check if SDP table exists (may not exist on first run before SDP refresh)
-        try:
-            cursor.execute("SELECT 1 FROM sdp_workstations_full LIMIT 1")
-        except sqlite3.OperationalError:
-            # SDP table doesn't exist yet - no matches possible
-            return None
-
         # Extract matching fields from CW device
         cw_name = cw_device.get("friendlyName", "").upper()
         cw_serial = (cw_device.get("system", {}).get("serialNumber") or "").upper()
-
-        # =====================================================================
-        # MATCH BY HOSTNAME (Primary method)
-        # =====================================================================
-        # Case-insensitive hostname match is the most reliable
-        cursor.execute(
-            "SELECT * FROM sdp_workstations_full WHERE UPPER(name) = ?",
-            (cw_name,)
-        )
-        row = cursor.fetchone()
-        if row:
+        
+        # 1. Hostname Match
+        if cw_name in lookup_name:
+            row = lookup_name[cw_name]
             existing_fields = self._extract_sdp_fields(row)
-            # Column is 'id' in the database (from SDP API response)
-            return (str(row["id"]), row["name"], f"Hostname match: {row['name']}", existing_fields)
-
-        # =====================================================================
-        # MATCH BY SERIAL NUMBER (Secondary method)
-        # =====================================================================
-        # Only try serial match if it's not a VM serial (VMware UUIDs)
-        if cw_serial and "VMWARE" not in cw_serial:
-            try:
-                cursor.execute(
-                    "SELECT * FROM sdp_workstations_full WHERE UPPER(ci_attributes_txt_serial_number) = ?",
-                    (cw_serial,)
-                )
-                row = cursor.fetchone()
-                if row:
-                    existing_fields = self._extract_sdp_fields(row)
-                    # Column is 'id' in the database (from SDP API response)
-                    return (str(row["id"]), row["name"], f"Serial match: {cw_serial}", existing_fields)
-            except sqlite3.OperationalError:
-                # Column doesn't exist - skip serial matching
-                pass
-
-        # No match found
+            return (str(row["ci_id"]), row["name"], f"Hostname match: {row['name']}", existing_fields)
+            
+        # 2. Serial Match (if not VM)
+        if cw_serial and "VMWARE" not in cw_serial and "VIRTUAL" not in cw_serial:
+            if cw_serial in lookup_serial:
+                row = lookup_serial[cw_serial]
+                existing_fields = self._extract_sdp_fields(row)
+                return (str(row["ci_id"]), row["name"], f"Serial match: {cw_serial}", existing_fields)
+                
         return None
 
     def _extract_sdp_fields(self, row) -> Dict[str, Any]:
         """
         Extract relevant fields from an SDP database row for comparison.
-
-        Maps the database column names to the field names used in fields_to_sync.
-
-        Args:
-            row: SQLite row object from sdp_workstations_full table
-
-        Returns:
-            Dictionary of field names to values
+        Samples keys safely to avoid KeyErrors if columns are missing.
         """
+        def get_val(key):
+            # Check if key exists in row (sqlite3.Row supports searching keys)
+            if key in row.keys():
+                return row[key]
+            return None
+            
         return {
-            "name": row["name"] if "name" in row.keys() else None,
-            "ci_attributes_txt_serial_number": row["ci_attributes_txt_serial_number"] if "ci_attributes_txt_serial_number" in row.keys() else None,
-            "ci_attributes_txt_os": row["ci_attributes_txt_os"] if "ci_attributes_txt_os" in row.keys() else None,
-            "ci_attributes_txt_manufacturer": row["ci_attributes_txt_manufacturer"] if "ci_attributes_txt_manufacturer" in row.keys() else None,
-            "ci_attributes_txt_ip_address": row["ci_attributes_txt_ip_address"] if "ci_attributes_txt_ip_address" in row.keys() else None,
-            "ci_attributes_txt_mac_address": row["ci_attributes_txt_mac_address"] if "ci_attributes_txt_mac_address" in row.keys() else None,
+            "name": get_val("name"),
+            "ci_attributes_txt_serial_number": get_val("serial_number"),
+            "ci_attributes_txt_os": get_val("os"),
+            "ci_attributes_txt_manufacturer": get_val("manufacturer"),
+            "ci_attributes_txt_ip_address": get_val("ip_address"),
+            "ci_attributes_txt_mac_address": None, # Not strictly in standard table, would need json parse if crucial
         }
 
     # =========================================================================

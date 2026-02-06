@@ -1,0 +1,31 @@
+# Auto-detect text files and normalise line endings
+* text=auto
+
+# Force specific file types to LF
+*.py text eol=lf
+*.sh text eol=lf
+*.command text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.env text eol=lf
+*.txt text eol=lf
+*.cfg text eol=lf
+*.ini text eol=lf
+*.gitignore text eol=lf
+*.gitattributes text eol=lf
+
+# Force Windows scripts to CRLF
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary files
+*.db binary
+*.sqlite binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+
