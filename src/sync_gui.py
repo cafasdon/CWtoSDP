@@ -2201,10 +2201,6 @@ class SyncGUI:
             self._cw_client = ConnectWiseClient(config.connectwise)
             db = Database()
 
-            # Use raw connection for checking existence (efficient check)
-            conn = db._get_connection()
-            cursor = conn.cursor()
-
             # Fetch basic endpoint list first
             self.root.after(0, lambda: self._update_cw_progress(0, 100, "Fetching endpoint list...", ""))
             logger.info("Fetching CW endpoint list...")
@@ -2216,9 +2212,8 @@ class SyncGUI:
             self.root.after(0, lambda: self._update_cw_progress(0, 100,
                 "Checking for existing data...", "Optimizing API calls"))
 
-            # Get existing endpoint IDs from cw_devices
-            cursor.execute("SELECT endpoint_id FROM cw_devices")
-            existing_ids = {row[0] for row in cursor.fetchall()}
+            # Get existing endpoint IDs via public API
+            existing_ids = db.get_cw_device_ids()
 
             incomplete_ids = []
             for ep in endpoints:
@@ -2300,10 +2295,7 @@ class SyncGUI:
             # Final count
             final_db = Database()
             try:
-                conn = final_db._get_connection()
-                cursor = conn.cursor()
-                cursor.execute("SELECT COUNT(*) FROM cw_devices")
-                final_count = cursor.fetchone()[0]
+                final_count = final_db.get_cw_device_count()
             finally:
                 final_db.close()
 
@@ -2449,16 +2441,12 @@ class SyncGUI:
             self._sdp_client = ServiceDeskPlusClient(config)
             db = Database()
 
-            # Use raw connection for checking existence
-            conn = db._get_connection()
-            cursor = conn.cursor()
-
             # INCREMENTAL: Get existing IDs from database first
             self.root.after(0, lambda: self._update_sdp_progress(0, 100,
                 "Checking existing data...", "Optimizing API calls"))
 
-            cursor.execute("SELECT ci_id FROM sdp_workstations")
-            existing_ids = {str(row[0]) for row in cursor.fetchall()}
+            # Get existing workstation IDs via public API
+            existing_ids = db.get_sdp_workstation_ids()
 
             already_have = len(existing_ids)
             logger.info(f"Found {already_have} existing SDP workstations in database")

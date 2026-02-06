@@ -198,8 +198,8 @@ def fetch_connectwise_data(config: AppConfig) -> dict:
                 batch.append(details)
             except Exception as e:
                 logger.error(f"Failed to fetch details for {dev.get('endpointId')}: {e}")
-                devices.append(dev) # Fallback to basic info
-                batch.append(dev)
+                logger.warning(f"Endpoint {dev.get('endpointId')} will need to be re-fetched on next run")
+                # Don't store incomplete data — only append to devices for return value
             
             completed_count += 1
             

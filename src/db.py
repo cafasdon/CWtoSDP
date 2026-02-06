@@ -210,6 +210,20 @@ class Database:
         row = cursor.fetchone()
         return json.loads(row["raw_json"]) if row else None
 
+    def get_cw_device_ids(self) -> set:
+        """Get set of all stored CW endpoint IDs."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT endpoint_id FROM cw_devices")
+        return {row[0] for row in cursor.fetchall()}
+
+    def get_cw_device_count(self) -> int:
+        """Get count of stored CW devices."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM cw_devices")
+        return cursor.fetchone()[0]
+
     # =========================================================================
     # ServiceDesk Plus Workstation Operations
     # =========================================================================
@@ -287,6 +301,13 @@ class Database:
         cursor.execute("SELECT raw_json FROM sdp_workstations WHERE ci_id = ?", (ci_id,))
         row = cursor.fetchone()
         return json.loads(row["raw_json"]) if row else None
+
+    def get_sdp_workstation_ids(self) -> set:
+        """Get set of all stored SDP workstation CI IDs (as strings)."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT ci_id FROM sdp_workstations")
+        return {str(row[0]) for row in cursor.fetchall()}
 
     # =========================================================================
     # Field Metadata Operations
