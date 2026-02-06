@@ -157,10 +157,13 @@ See `credentials.env.template` for detailed instructions on each field.
 ## First Run
 
 1. **Launch** the Sync Manager
-2. **Refresh Data**: Click 🔄 CW and 🔄 SDP buttons
-3. **Review Preview**: Check the sync actions
-4. **Test with Dry Run**: Default mode, no changes made
-5. **Execute Sync**: Enable "Real Sync" checkbox when ready
+2. **Refresh Data**: Click 🔄 CW and 🔄 SDP buttons to fetch data from both APIs
+3. **Review Preview**: Check the sync actions — green rows are new CIs, blue rows are updates
+4. **Test with Dry Run**: Click the sync button (dry run is ON by default — no changes are made, no API calls sent)
+5. **Check Results**: Review the Results tab to see exactly what would happen
+6. **Execute Sync**: When satisfied, check ☑ **Enable Real Sync** and click ⚠️ **Execute Real Sync**
+
+> **Note:** The first data fetch may take a while depending on how many devices you have. The tool uses adaptive rate limiting — if the API starts throttling, it will slow down automatically and recover once the limit clears. Subsequent fetches are incremental and much faster.
 
 ---
 
@@ -199,11 +202,13 @@ See `credentials.env.template` for detailed instructions on each field.
 
 #### "Rate limit exceeded" (429 errors)
 
-The app has built-in adaptive rate limiting. If you see this:
+The app has built-in adaptive rate limiting that handles this automatically:
 
-1. Wait a few minutes and try again
-2. The rate limiter will automatically slow down
-3. For large syncs, let it run overnight
+1. **You don't need to do anything** — the rate limiter will slow down when it hits a 429 and speed back up once the limit clears
+2. **Backoff**: When rate limited, the wait between requests doubles (up to 120 seconds max)
+3. **Recovery**: After the limit clears, wait times decrease dynamically — halving when far above target, fine-tuning when close
+4. **Typical recovery**: From max throttle (120s) back to normal (~0.3s) takes about 5–10 minutes
+5. For very large initial syncs, the first run may take longer — subsequent runs use incremental fetch and are much faster
 
 #### Database errors on first run
 

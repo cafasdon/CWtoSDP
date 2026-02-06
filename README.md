@@ -2,8 +2,9 @@
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-Dual-green.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)]()
 
-Integration tool for syncing device/asset data between **ConnectWise RMM** and **ManageEngine ServiceDesk Plus Cloud** CMDB.
+Integration tool for syncing device/asset data between **ConnectWise RMM** and **ManageEngine ServiceDesk Plus Cloud** CMDB. Includes a full GUI for interactive use and CLI scripts for automated scheduled syncs.
 
 ## 🚀 Quick Start
 
@@ -15,13 +16,13 @@ Integration tool for syncing device/asset data between **ConnectWise RMM** and *
 
 ### Installation
 
-**Windows:** Double-click `start.bat`
+| Platform | Command |
+|----------|---------|
+| **Windows** | Double-click `start.bat` |
+| **macOS** | Double-click `start.command` |
+| **Linux** | `chmod +x start.sh && ./start.sh` |
 
-**macOS:** Double-click `start.command`
-
-**Linux:** Run `chmod +x start.sh && ./start.sh`
-
-The installer will automatically set up everything and launch the GUI.
+The launcher will automatically create a virtual environment, install dependencies, and open the GUI.
 
 ### First Time Setup
 
@@ -41,16 +42,18 @@ The installer will automatically set up everything and launch the GUI.
 | Feature | Description |
 |---------|-------------|
 | **Sync Manager GUI** | Visual interface for previewing and executing syncs |
-| **Dry Run Mode** | Preview changes before committing (enabled by default) |
+| **Dry Run Mode** | Two-level safety: preview changes before committing (enabled by default) |
 | **Selective Sync** | Choose which items to sync with checkboxes |
-| **Device Classification** | Auto-categorizes: Laptop, Desktop, Server, VM, Network |
-| **Field Mapping** | Maps CW fields to SDP CMDB attributes |
+| **Create & Update** | Creates new CIs in SDP and updates existing ones with changed fields |
+| **Device Classification** | Auto-categorizes: Laptop, Desktop, Server, VM, Network Device |
+| **Field Mapping** | Maps CW fields to SDP CMDB attributes with visual preview |
 | **Diff View** | Side-by-side comparison of CW vs SDP data |
 | **Full DB View** | See all records from both systems with match status |
-| **Revert Capability** | Undo last sync operation |
-| **Incremental Fetch** | Only downloads new/changed data |
-| **Rate Limiting** | Adaptive rate limiting prevents API throttling |
-| **Settings GUI** | Configure credentials without editing files |
+| **Revert Capability** | Undo last sync operation (created items) |
+| **Incremental Fetch** | Only downloads new/changed data since last fetch |
+| **Adaptive Rate Limiting** | Dynamic backoff and recovery — automatically adjusts API call speed |
+| **Settings GUI** | Configure and test API credentials without editing files |
+| **Automated Sync** | CLI script with scheduling support for Windows, macOS, and Linux |
 
 ---
 
@@ -199,10 +202,22 @@ For UPDATE items, each field shows what will happen:
 
 ### Dry Run vs Real Sync
 
-| Mode      | Checkbox State | What Happens                        |
-| --------- | -------------- | ----------------------------------- |
-| Dry Run   | ☐ Unchecked    | Preview only, no changes to SDP     |
-| Real Sync | ☑ Checked      | Actually creates/updates CIs in SDP |
+| Mode | Checkbox State | What Happens |
+| ---- | -------------- | ------------ |
+| Dry Run | ☐ Unchecked | Preview only — no API calls, no changes to SDP |
+| Real Sync | ☑ Checked | Actually creates/updates CIs in SDP |
+
+**Dry run is the default.** When enabled, the SDP client has **two levels of safety**:
+
+1. **Method level** — Each write method (`create_ci`, `update_ci`, `delete_ci`) returns a simulated success immediately without making any HTTP request
+2. **Request level** — Even if something bypasses level 1, all POST/PUT/DELETE HTTP requests are blocked
+
+This means dry run is **instant** (no network calls) and **completely safe** — nothing is sent to SDP.
+
+After a dry run, the Results tab shows exactly what *would* happen with color-coded rows:
+- 🟢 `would_create` — new item that would be created
+- 🔵 `would_update` — existing item that would be updated
+- 🔴 `failed` — item that would fail
 
 ---
 
@@ -367,80 +382,114 @@ After each run, results are saved to `logs/sync_results_YYYYMMDD_HHMMSS.json`:
 
 ### Troubleshooting Automation
 
-| Issue                 | Solution                                        |
-| --------------------- | ----------------------------------------------- |
-| Script not running    | Check file permissions (`chmod +x` on Unix)     |
+| Issue | Solution |
+| ----- | -------- |
+| Script not running | Check file permissions (`chmod +x` on Unix) |
 | Credentials not found | Ensure `credentials.env` exists in project root |
-| Rate limit errors     | Increase delay between runs (hourly → daily)    |
-| No output             | Check Task Scheduler history or cron logs       |
+| Rate limit errors | The tool handles this automatically — it will slow down and recover on its own |
+| No output | Check Task Scheduler history or cron logs |
+| Slow after rate limit | Normal behavior — the tool recovers gradually, halving the wait time with each success |
 
 ---
 
 ## Safety Features
 
-⚠️ **DRY_RUN mode is ENABLED by default**
+⚠️ **DRY RUN mode is ENABLED by default** — you cannot accidentally modify SDP data.
 
-| Feature        | Default   | Description                     |
-| -------------- | --------- | ------------------------------- |
-| Dry Run        | ON        | Preview changes without writing |
-| Selective Sync | ON        | Choose specific items to sync   |
-| Confirmation   | Required  | Dialog before real sync         |
-| Revert         | Available | Undo last sync operation        |
+| Feature | Default | Description |
+| ------- | ------- | ----------- |
+| Dry Run | ON | Two-level safety — no API calls made, instant preview |
+| Selective Sync | ON | Choose specific items to sync via checkboxes |
+| Confirmation | Required | Detailed confirmation dialog before any real sync |
+| Revert | Available | Undo last sync by deleting created items |
+| Adaptive Rate Limiting | ON | Prevents API throttling with automatic backoff and recovery |
+
+### Adaptive Rate Limiting
+
+The tool automatically manages API call speed to avoid rate limit errors (HTTP 429):
+
+- **Backoff**: When a rate limit is hit, the interval doubles (up to 120s max)
+- **Recovery**: After the rate limit clears, the interval gradually decreases back toward minimum
+- **Dynamic speedup**: Recovery speed adapts based on how far above target — halves the interval when very far away, fine-tunes when close
+- **Per-API tracking**: ConnectWise and SDP have independent rate limiters with separate settings
+
+You don't need to configure anything — rate limiting is fully automatic and transparent.
 
 ## Folder Structure
 
 ```text
 CWtoSDP/
 ├── src/                          # Source code
-│   ├── config.py                 # Configuration management
-│   ├── cw_client.py              # ConnectWise API client
-│   ├── sdp_client.py             # ServiceDesk Plus API client
-│   ├── sync_engine.py            # Sync logic and matching
-│   ├── sync_gui.py               # Sync Manager GUI
-│   ├── field_mapper.py           # Device classification
-│   ├── db_compare.py             # SQLite comparison database
-│   ├── rate_limiter.py           # Adaptive rate limiting
-│   ├── logger.py                 # Logging configuration
-│   └── main.py                   # Entry point
-├── data/                         # SQLite databases
-├── logs/                         # Application logs
-├── docs/                         # API documentation
-├── install.bat/.command/.sh      # Platform installers
-├── launch_sync.bat/.command/.sh  # GUI launchers
-├── run_sync.bat/.command/.sh     # Automation launchers
-├── run_sync.py                   # Automation script
-├── credentials.env.template      # Credential template
-└── requirements.txt              # Python dependencies
+│   ├── __init__.py               # Package init
+│   ├── main.py                   # CLI entry point
+│   ├── sync_gui.py               # Sync Manager GUI (main interface)
+│   ├── sync_engine.py            # Sync logic, matching, and comparison
+│   ├── cw_client.py              # ConnectWise RMM API client
+│   ├── sdp_client.py             # ServiceDesk Plus API client (with dry-run)
+│   ├── config.py                 # Configuration and credential management
+│   ├── db.py                     # Primary SQLite database operations
+│   ├── db_compare.py             # Comparison database for sync preview
+│   ├── field_mapper.py           # CW→SDP field mapping and device classification
+│   ├── asset_matcher.py          # Asset matching GUI for manual matching
+│   ├── gui.py                    # Field mapper GUI
+│   ├── rate_limiter.py           # Adaptive rate limiting with dynamic recovery
+│   └── logger.py                 # Logging configuration
+├── data/                         # SQLite databases (auto-created)
+├── logs/                         # Application and sync result logs
+├── docs/                         # API reference documentation
+├── start.bat/.command/.sh        # One-click installer + launcher
+├── install.bat/.command/.sh      # Standalone installer
+├── launch_sync.bat/.command/.sh  # GUI-only launcher (no install)
+├── run_sync.bat/.command/.sh     # Automation launcher (headless)
+├── run_sync.py                   # Automation sync script
+├── credentials.env.template      # Credential template with instructions
+├── requirements.txt              # Python dependencies
+└── LICENSE                       # Dual license (Non-Commercial / Commercial)
 ```
 
 ## Device Classification
 
-| CW Type                    | Classification  | SDP CI Type            |
-| -------------------------- | --------------- | ---------------------- |
-| Desktop (ThinkPad/ProBook) | Laptop          | ci_windows_workstation |
-| Desktop (other)            | Desktop         | ci_windows_workstation |
-| Server + VMware serial     | Virtual Server  | ci_virtual_machine     |
-| Server + real serial       | Physical Server | ci_windows_server      |
-| NetworkDevice              | Network Device  | ci_switch              |
+Devices are automatically classified using model name, serial number, and CW device type:
+
+| CW Type | Classification | SDP CI Type | Detection Method |
+| ------- | -------------- | ----------- | ---------------- |
+| Desktop (ThinkPad/ProBook/etc.) | Laptop | ci_windows_workstation | Model name keywords |
+| Desktop (other) | Desktop | ci_windows_workstation | Default for desktops |
+| Server + VMware serial | Virtual Server | ci_virtual_machine | VMware UUID pattern |
+| Server + real serial | Physical Server | ci_windows_server | Hardware serial number |
+| NetworkDevice | Network Device | ci_switch | CW device type |
+| Mobile | Mobile Device | ci_windows_workstation | CW device type |
 
 ## API Access
 
-| System           | Endpoint                  | Access    |
-| ---------------- | ------------------------- | --------- |
-| ConnectWise      | Devices, Sites, Companies | Read      |
-| ServiceDesk Plus | Requests                  | Read-only |
-| ServiceDesk Plus | Assets                    | Full CRUD |
-| ServiceDesk Plus | CMDB                      | Full CRUD |
+| System | Endpoint | Access | Used For |
+| ------ | -------- | ------ | -------- |
+| ConnectWise | Devices, Sites, Companies | Read | Fetching endpoint data |
+| ServiceDesk Plus | CMDB (CI Types) | Full CRUD | Creating/updating/deleting CIs |
+| ServiceDesk Plus | Requests | Read-only | Future ticket integration |
 
 ## Data Centers
 
-| Region | Zoho Accounts        | SDP API                         |
-| ------ | -------------------- | ------------------------------- |
-| EU     | accounts.zoho.eu     | sdpondemand.manageengine.eu     |
-| US     | accounts.zoho.com    | sdpondemand.manageengine.com    |
-| IN     | accounts.zoho.in     | sdpondemand.manageengine.in     |
-| AU     | accounts.zoho.com.au | sdpondemand.manageengine.com.au |
+Configure the correct URLs for your ServiceDesk Plus region:
+
+| Region | Zoho Accounts | SDP API |
+| ------ | ------------- | ------- |
+| EU | accounts.zoho.eu | sdpondemand.manageengine.eu |
+| US | accounts.zoho.com | sdpondemand.manageengine.com |
+| IN | accounts.zoho.in | sdpondemand.manageengine.in |
+| AU | accounts.zoho.com.au | sdpondemand.manageengine.com.au |
+
+You can set the data center in **⚙️ Settings** or in `credentials.env` — see [SETUP.md](SETUP.md) for details.
 
 ## Documentation
 
-See `docs/ManageEngine-ServiceDesk-API.md` for complete API documentation.
+- [Setup Guide](SETUP.md) — Installation, API credentials, first run
+- [API Reference](docs/ManageEngine-ServiceDesk-API.md) — ServiceDesk Plus API documentation
+- [License](LICENSE) — Dual license (free for non-commercial use)
+
+## Version History
+
+| Version | Date | Changes |
+| ------- | ---- | ------- |
+| 1.1.0 | 2026-02-06 | Adaptive rate limiting with dynamic recovery, two-level dry run safety, CREATE + UPDATE sync, improved error handling |
+| 1.0.0 | 2026-01-20 | Initial release — GUI sync manager, device classification, field mapping, dry run |

@@ -3178,15 +3178,31 @@ DRY RUN VS REAL SYNC
 ═══════════════════════════════════════════════════════════
 
 DRY RUN (Default - Safe):
-  • Shows what WOULD happen
-  • No changes made to SDP
+  • Shows what WOULD happen without making any changes
+  • Two-level safety: write methods return dummy success,
+    and all POST/PUT/DELETE HTTP requests are blocked
+  • No API calls made — instant and completely safe
   • Results show "would_create" or "would_update"
 
 REAL SYNC (☑ Enable Real Sync):
   • Actually creates/updates CIs in SDP
-  • Requires confirmation dialog
+  • Requires confirmation dialog with summary
   • Results show "created" or "updated"
-  • Can be reverted with Revert button
+  • Can be reverted with Revert button (created items)
+
+═══════════════════════════════════════════════════════════
+RATE LIMITING
+═══════════════════════════════════════════════════════════
+
+The tool automatically manages API call speed:
+
+  • Backoff: Doubles wait time on 429 errors (max 120s)
+  • Recovery: Gradually speeds back up after limit clears
+  • Dynamic: Halves interval when far above target,
+    fine-tunes when close to normal speed
+  • Per-API: CW and SDP have independent rate limiters
+
+No configuration needed — fully automatic.
 """
         text.insert("1.0", content)
         text.config(state=tk.DISABLED)
@@ -3316,10 +3332,13 @@ COMMON ISSUES:
    → For SDP, refresh token may have expired
    → Generate new Zoho OAuth tokens
 
-❌ "Rate limit exceeded"
-   → Wait a few minutes before retrying
-   → Reduce sync frequency (hourly → daily)
-   → The tool has automatic backoff built in
+❌ "Rate limit exceeded" (429 errors)
+   → No action needed — handled automatically
+   → The rate limiter will slow down on 429 errors
+   → It recovers gradually once the limit clears
+   → Halves the wait time when far above target
+   → Fine-tunes when close to normal speed
+   → Typical recovery: 5-10 minutes from max throttle
 
 ❌ "No devices found"
    → Click 🔄 Refresh CW Data to fetch devices
@@ -3337,6 +3356,20 @@ COMMON ISSUES:
    → Linux: sudo apt install python3-tk
 
 ─────────────────────────────────────────────────────────
+DRY RUN SAFETY
+─────────────────────────────────────────────────────────
+
+Dry run mode is ON by default. Two levels of protection:
+
+Level 1 (Method): Each write method (create, update,
+  delete) returns simulated success without any HTTP call
+
+Level 2 (Request): All POST/PUT/DELETE HTTP requests are
+  blocked even if something bypasses Level 1
+
+Dry run is instant (no network calls) and completely safe.
+
+─────────────────────────────────────────────────────────
 LOG FILES
 ─────────────────────────────────────────────────────────
 
@@ -3344,8 +3377,8 @@ Application logs: logs/cwtosdp.log (rotates at 5MB, 3 backups)
 Sync results:     logs/sync_results_*.json
 
 Log levels:
-• INFO  - Normal operations
-• WARN  - Non-critical issues
+• INFO  - Normal operations (includes rate limiter status)
+• WARN  - Non-critical issues (rate limit hits)
 • ERROR - Failures requiring attention
 
 ─────────────────────────────────────────────────────────
