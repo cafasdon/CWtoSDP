@@ -2203,6 +2203,7 @@ class SyncGUI:
         Background thread for CW refresh with incremental fetch.
         Refactored to use standard Database class and cw_devices table.
         """
+        db = None
         try:
             from .cw_client import ConnectWiseClient
             from .config import load_config
@@ -2212,7 +2213,7 @@ class SyncGUI:
             config = load_config()
             self._cw_client = ConnectWiseClient(config.connectwise)
             db = Database()
-            
+
             # Use raw connection for checking existence (efficient check)
             conn = db._get_connection()
             cursor = conn.cursor()
@@ -2227,11 +2228,11 @@ class SyncGUI:
             # Check which endpoints need detailed fetch (incremental)
             self.root.after(0, lambda: self._update_cw_progress(0, 100,
                 "Checking for existing data...", "Optimizing API calls"))
-            
+
             # Get existing endpoint IDs from cw_devices
             cursor.execute("SELECT endpoint_id FROM cw_devices")
             existing_ids = {row[0] for row in cursor.fetchall()}
-            
+
             incomplete_ids = []
             for ep in endpoints:
                 ep_id = ep.get("endpointId")
@@ -2247,6 +2248,7 @@ class SyncGUI:
                 self.root.after(0, lambda: self._update_cw_progress(100, 100,
                     "All data up to date!", f"{total_endpoints} endpoints already complete"))
                 db.close()
+                db = None
                 self.root.after(0, lambda: self._cw_refresh_done(total_endpoints))
                 return
 
@@ -2262,23 +2264,23 @@ class SyncGUI:
             # 2 threads allow one to sleep while the other fires, keeping the
             # pipeline full without wasting OS resources on idle threads.
             max_workers = 2
-            
+
             fetched = 0
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                 # Submit tasks
                 future_to_ep = {
-                    executor.submit(self._cw_client.get_endpoint_details, ep["endpointId"]): ep 
-                    for ep in endpoints 
+                    executor.submit(self._cw_client.get_endpoint_details, ep["endpointId"]): ep
+                    for ep in endpoints
                     if ep.get("endpointId") and ep.get("endpointId") not in existing_ids
                 }
-                
+
                 for future in concurrent.futures.as_completed(future_to_ep):
                     if self._cw_cancelled:
                         break
-                        
+
                     ep = future_to_ep[future]
                     fetched += 1
-                    
+
                     # Update progress bar only (rate limit is handled by monitor)
                     status = f"Fetching {fetched} of {need_fetch} (skipped {already_complete} complete)"
                     self.root.after(0, lambda f=fetched, n=need_fetch, s=status:
@@ -2286,13 +2288,13 @@ class SyncGUI:
 
                     try:
                         details = future.result()
-                        
+
                         # Store
                         # Ensure endpointId is present (API detail view might omit it)
                         if "endpointId" not in details:
                             details["endpointId"] = ep["endpointId"]
                         db.store_cw_devices([details])
-                        
+
                         # Feed
                         d_name = details.get("friendlyName", ep.get("endpointId", "")[:20])
                         d_type = details.get("endpointType", "Unknown")
@@ -2302,18 +2304,21 @@ class SyncGUI:
                         logger.warning(f"Failed to fetch {ep.get('endpointId')}: {e}")
 
             db.close()
-            
+            db = None
+
             if self._cw_cancelled:
                 self.root.after(0, self._cw_refresh_cancelled)
                 return
 
             # Final count
             final_db = Database()
-            conn = final_db._get_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM cw_devices")
-            final_count = cursor.fetchone()[0]
-            final_db.close()
+            try:
+                conn = final_db._get_connection()
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM cw_devices")
+                final_count = cursor.fetchone()[0]
+            finally:
+                final_db.close()
 
             logger.info(f"CW refresh complete: {final_count} endpoints with full data")
             self.root.after(0, lambda: self._cw_refresh_done(final_count))
@@ -2324,6 +2329,9 @@ class SyncGUI:
             else:
                 logger.error(f"CW refresh failed: {e}")
                 self.root.after(0, lambda: self._cw_refresh_error(str(e)))
+        finally:
+            if db:
+                db.close()
 
     def _cw_refresh_done(self, count: int):
         """Handle successful CW refresh completion."""
@@ -2443,6 +2451,7 @@ class SyncGUI:
         Background thread for SDP refresh with incremental fetch optimization.
         Refactored to use standard Database class and sdp_workstations table.
         """
+        db = None
         try:
             from .sdp_client import ServiceDeskPlusClient
             from .config import load_sdp_config
@@ -2452,7 +2461,7 @@ class SyncGUI:
             config = load_sdp_config()
             self._sdp_client = ServiceDeskPlusClient(config)
             db = Database()
-            
+
             # Use raw connection for checking existence
             conn = db._get_connection()
             cursor = conn.cursor()
@@ -2460,10 +2469,10 @@ class SyncGUI:
             # INCREMENTAL: Get existing IDs from database first
             self.root.after(0, lambda: self._update_sdp_progress(0, 100,
                 "Checking existing data...", "Optimizing API calls"))
-            
+
             cursor.execute("SELECT ci_id FROM sdp_workstations")
             existing_ids = {str(row[0]) for row in cursor.fetchall()}
-            
+
             already_have = len(existing_ids)
             logger.info(f"Found {already_have} existing SDP workstations in database")
 
@@ -2504,24 +2513,29 @@ class SyncGUI:
 
             if self._sdp_cancelled:
                 db.close()
+                db = None
                 self.root.after(0, self._sdp_refresh_cancelled)
                 return
 
             # Store ALL records to ensure we have fresh data (updates handled by DB)
             self.root.after(0, lambda: self._update_sdp_progress(100, 100,
                 f"Storing {len(workstations)} records...", ""))
-            
+
             stored = 0
             if workstations:
                 stored = db.store_sdp_workstations(workstations)
 
             db.close()
+            db = None
             logger.info(f"Stored {stored} SDP workstations (Total fetched: {len(workstations)})")
             self.root.after(0, lambda: self._sdp_refresh_done_incremental(stored, skipped_count))
 
         except Exception as e:
             logger.error(f"SDP refresh failed: {e}")
             self.root.after(0, lambda: self._sdp_refresh_error(str(e)))
+        finally:
+            if db:
+                db.close()
 
     def _sdp_refresh_done(self, count: int):
         """Handle successful SDP refresh completion."""
@@ -2915,32 +2929,39 @@ SCOPES=SDPOnDemand.assets.ALL,SDPOnDemand.cmdb.ALL,SDPOnDemand.requests.READ
         self.dialog.destroy()
 
     def _test_connections(self):
-        """Test API connections."""
+        """Test API connections using the current form field values (not saved file)."""
+        from .config import ConnectWiseConfig, ServiceDeskPlusConfig
+
         results = []
 
-        # Test ConnectWise
+        # Test ConnectWise — build config from form fields
         try:
             from .cw_client import ConnectWiseClient
-            from .config import load_config
-            config = load_config()
-            # Pass the connectwise sub-config, not the full AppConfig
-            client = ConnectWiseClient(config.connectwise)
+            cw_config = ConnectWiseConfig(
+                client_id=self.cw_client_id.get().strip(),
+                client_secret=self.cw_client_secret.get().strip(),
+            )
+            client = ConnectWiseClient(cw_config)
             client.authenticate()
             results.append("✅ ConnectWise: Authentication successful")
         except Exception as e:
-            results.append(f"❌ ConnectWise: {str(e)[:50]}")
+            results.append(f"❌ ConnectWise: {str(e)[:80]}")
 
-        # Test ServiceDesk Plus
+        # Test ServiceDesk Plus — build config from form fields
         try:
             from .sdp_client import ServiceDeskPlusClient
-            from .config import load_sdp_config
-            sdp_config = load_sdp_config()
+            sdp_config = ServiceDeskPlusConfig(
+                client_id=self.zoho_client_id.get().strip(),
+                client_secret=self.zoho_client_secret.get().strip(),
+                refresh_token=self.zoho_refresh_token.get().strip(),
+                accounts_url=self.zoho_accounts_url.get().strip(),
+                api_base_url=self.sdp_api_url.get().strip(),
+            )
             client = ServiceDeskPlusClient(sdp_config)
-            # Use refresh_access_token() to test authentication
             client.refresh_access_token()
             results.append("✅ ServiceDesk Plus: Authentication successful")
         except Exception as e:
-            results.append(f"❌ ServiceDesk Plus: {str(e)[:50]}")
+            results.append(f"❌ ServiceDesk Plus: {str(e)[:80]}")
 
         messagebox.showinfo("Connection Test Results", "\n".join(results))
 
