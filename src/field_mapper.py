@@ -188,9 +188,11 @@ class DeviceClassifier:
             if re.search(pattern, model, re.IGNORECASE):
                 return True
 
-        # "Virtual Machine" in model name is treated as desktop-like
-        if 'Virtual Machine' in model:
-            return True
+        # Note: "Virtual Machine" in model is NOT treated as desktop.
+        # VMs with endpointType "Desktop" should default to Laptop (the
+        # classify() caller), and VMs with endpointType "Server" are
+        # handled by _is_virtual(). Classifying VMs as Desktop would
+        # prevent them from being correctly identified as virtual servers.
 
         return False
 

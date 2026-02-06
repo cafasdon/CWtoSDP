@@ -217,6 +217,9 @@ def fetch_connectwise_data(config: AppConfig) -> dict:
     if batch:
         db.store_cw_devices(batch)
 
+    # Close incremental DB — main caller stores devices separately
+    db.close()
+
     # Fetch other data types
     data = {
         "devices": devices,      # Detailed endpoint devices

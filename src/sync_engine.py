@@ -371,20 +371,32 @@ class SyncEngine:
         """
         Extract relevant fields from an SDP database row for comparison.
         Samples keys safely to avoid KeyErrors if columns are missing.
+        Also parses raw_json for mac_address which isn't a direct column.
         """
         def get_val(key):
             # Check if key exists in row (sqlite3.Row supports searching keys)
             if key in row.keys():
                 return row[key]
             return None
-            
+
+        # Try to extract mac_address from raw_json (not a direct DB column)
+        mac_address = None
+        raw = get_val("raw_json")
+        if raw:
+            try:
+                ws = json.loads(raw)
+                ci_attrs = ws.get("ci_attributes", {})
+                mac_address = ci_attrs.get("txt_mac_address") or None
+            except (json.JSONDecodeError, AttributeError):
+                pass
+
         return {
             "name": get_val("name"),
             "ci_attributes_txt_serial_number": get_val("serial_number"),
             "ci_attributes_txt_os": get_val("os"),
             "ci_attributes_txt_manufacturer": get_val("manufacturer"),
             "ci_attributes_txt_ip_address": get_val("ip_address"),
-            "ci_attributes_txt_mac_address": None, # Not strictly in standard table, would need json parse if crucial
+            "ci_attributes_txt_mac_address": mac_address,
         }
 
     # =========================================================================

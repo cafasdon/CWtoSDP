@@ -1717,6 +1717,8 @@ class SyncGUI:
         self.progress_win.title(title)
         self.progress_win.geometry("600x400")
         self.progress_win.transient(self.root)
+        # Prevent crash if user closes window during sync — treat as no-op
+        self.progress_win.protocol("WM_DELETE_WINDOW", lambda: None)
 
         header = "Preview: What would be created..." if is_dry_run else "Creating assets in SDP..."
         ttk.Label(self.progress_win, text=header,
@@ -1886,7 +1888,9 @@ class SyncGUI:
         self.root.after(0, lambda: self.revert_btn.config(state=tk.NORMAL))
 
     def _update_progress(self, current: int, total: int, log_msg: str):
-        """Update progress UI."""
+        """Update progress UI (guards against closed window)."""
+        if not hasattr(self, 'progress_win') or not self.progress_win.winfo_exists():
+            return
         self.progress_bar["value"] = current
         self.progress_label.config(text=f"{current} / {total}")
 
@@ -2618,12 +2622,18 @@ class SyncGUI:
             except sqlite3.OperationalError:
                 pass  # Table doesn't exist yet
 
-            # Check fetch tracker
+            # Check last fetch times from cw_devices and sdp_workstations
             try:
-                cursor.execute("SELECT source, last_fetch, total_fetched FROM fetch_tracker")
-                fetch_info = cursor.fetchall()
+                cursor.execute("""
+                    SELECT 'ConnectWise' AS source, MAX(fetched_at) AS last_fetch, COUNT(*) AS total
+                    FROM cw_devices
+                    UNION ALL
+                    SELECT 'ServiceDesk Plus', MAX(fetched_at), COUNT(*)
+                    FROM sdp_workstations
+                """)
+                fetch_info = [(r[0], r[1], r[2]) for r in cursor.fetchall() if r[1]]
             except sqlite3.OperationalError:
-                pass  # Table doesn't exist yet
+                pass  # Tables don't exist yet
         finally:
             if conn:
                 conn.close()

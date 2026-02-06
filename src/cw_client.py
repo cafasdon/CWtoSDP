@@ -324,11 +324,13 @@ class ConnectWiseClient:
                 elif resp.status_code == 401:
                     # Unauthorized - token probably expired
                     # Clear token and re-authenticate, then retry
+                    # Does NOT count against max_retries (decrement attempt)
                     logger.warning("Token expired, re-authenticating...")
                     with self._lock:
                         # Double-check inside lock to ensure another thread didn't just refresh it
                         self._access_token = None
                         self.authenticate()
+                    attempt -= 1  # Don't count auth refresh as a retry
                     continue  # Retry with new token
 
                 elif resp.status_code == 429:
