@@ -241,11 +241,18 @@ class AdaptiveRateLimiter:
         Call this method AFTER a successful API request (200 OK).
 
         Tracks consecutive successes and speeds up the request rate
-        after a streak of successful calls. Uses a more aggressive
-        binary-search approach when an optimal interval is known —
-        jumps 75% of the way toward optimal instead of 50%, so
-        recovery after a rate-limit event takes ~6-9 requests
-        instead of ~15-30.
+        after a streak of successful calls:
+
+        1. If an optimal interval is known and current > optimal:
+           Binary search — jumps 75% toward optimal for fast convergence.
+
+        2. Otherwise, uses dynamic speedup based on distance from target:
+           - >10x min_interval: halve the interval (aggressive recovery)
+           - >3x min_interval: reduce by 30% (moderate recovery)
+           - ≤3x min_interval: reduce by 10% (gentle fine-tuning)
+
+           This means recovery from max_interval (120s) to min_interval
+           (0.3s) takes ~39 requests instead of ~156 with a fixed 10%.
 
         After sustained success (recovery_threshold consecutive successes
         since the last rate limit), gradually decays the rate-limit
@@ -293,14 +300,35 @@ class AdaptiveRateLimiter:
                     # (was 50% — the old midpoint approach recovered too slowly)
                     new_interval = self._current_interval * 0.25 + self._optimal_interval * 0.75
                 else:
-                    # Standard speedup (no optimal known yet, or already at/below optimal)
-                    new_interval = self._current_interval * self.speedup_factor
+                    # Dynamic speedup based on how far above min_interval we are.
+                    # When the interval is very high (e.g. after hitting max_interval),
+                    # a fixed 10% reduction is far too slow — recovery from 120s to 0.3s
+                    # would take ~156 requests (~4 hours). Instead, use aggressive halving
+                    # when far away and gentle 10% when close to the target.
+                    ratio = self._current_interval / self.min_interval
+                    if ratio > 10:
+                        # Very far from target — aggressive recovery (halve the interval)
+                        effective_speedup = 0.5
+                    elif ratio > 3:
+                        # Moderately far — moderate recovery (30% reduction)
+                        effective_speedup = 0.7
+                    else:
+                        # Close to target — gentle recovery (10% reduction)
+                        effective_speedup = self.speedup_factor
+
+                    new_interval = self._current_interval * effective_speedup
 
                 # Only apply if above minimum (don't go faster than allowed)
                 if new_interval >= self.min_interval:
+                    old_interval = self._current_interval
                     self._current_interval = new_interval
-                    logger.debug(f"[{self.name}] Speeding up: interval now {self._current_interval:.3f}s "
-                               f"({60/self._current_interval:.1f} req/min)")
+                    # Use INFO level for aggressive recovery so it's visible in logs
+                    if old_interval / self.min_interval > 3:
+                        logger.info(f"[{self.name}] Recovery speedup: {old_interval:.2f}s → "
+                                   f"{self._current_interval:.2f}s ({60/self._current_interval:.1f} req/min)")
+                    else:
+                        logger.debug(f"[{self.name}] Speeding up: interval now {self._current_interval:.3f}s "
+                                    f"({60/self._current_interval:.1f} req/min)")
 
                 # Reset streak counter
                 self._consecutive_successes = 0
