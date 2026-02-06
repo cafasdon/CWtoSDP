@@ -43,6 +43,7 @@ Usage Example:
 """
 
 import time
+import random
 import threading
 from typing import Any, Dict, List, Optional
 
@@ -342,8 +343,9 @@ class ConnectWiseClient:
                     # Other error - inform rate limiter and retry with backoff
                     self.rate_limiter.on_error()
                     logger.warning(f"Request failed with {resp.status_code}, retrying...")
-                    # Exponential backoff: 1s, 2s, 4s, 8s, ... capped at 60s
+                    # Exponential backoff with ±20% jitter to prevent synchronized retries
                     wait_time = min(self.retry_delay * (2 ** (attempt - 1)), 60)
+                    wait_time *= random.uniform(0.8, 1.2)
                     time.sleep(wait_time)
                     continue
 
@@ -352,8 +354,9 @@ class ConnectWiseClient:
                 self.rate_limiter.on_error()
                 logger.warning(f"Request attempt {attempt} failed: {e}")
 
-                # Exponential backoff: 1s, 2s, 4s, 8s, ... capped at 60s
+                # Exponential backoff with ±20% jitter to prevent synchronized retries
                 wait_time = min(self.retry_delay * (2 ** (attempt - 1)), 60)
+                wait_time *= random.uniform(0.8, 1.2)
                 logger.info(f"Waiting {wait_time:.1f}s before retry...")
                 time.sleep(wait_time)
 

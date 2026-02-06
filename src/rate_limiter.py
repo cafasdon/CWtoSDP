@@ -1,6 +1,6 @@
 """
 ================================================================================
-Adaptive Rate Limiter with Exponential Backoff
+Adaptive Rate Limiter with Exponential Backoff and Jitter
 ================================================================================
 
 This module provides intelligent rate limiting for API requests that:
@@ -8,6 +8,7 @@ This module provides intelligent rate limiting for API requests that:
 2. Speeds up when requests succeed consistently (up to min_interval)
 3. Slows down exponentially when hitting rate limits (429 errors)
 4. Moderately backs off on other errors to prevent cascading failures
+5. Uses jitter to prevent synchronized retry storms across threads
 
 Why Adaptive Rate Limiting?
 ---------------------------
@@ -24,13 +25,23 @@ The adaptive approach finds the optimal speed automatically by:
 1. Starting at a conservative rate
 2. Speeding up when requests succeed
 3. Backing off immediately when limits are hit
+4. Using boundary tracking to converge on the optimal rate
+
+Thread Safety:
+--------------
+The wait() method uses a two-phase approach:
+1. LOCK: Calculate required wait time and reserve a slot (update timestamp)
+2. UNLOCK: Sleep outside the lock so other threads aren't blocked
+
+This allows multiple threads to pipeline through the rate limiter
+efficiently — each thread gets a scheduled slot, then sleeps independently.
 
 Algorithm:
 ----------
-1. WAIT: Before each request, wait for current_interval seconds
-2. ON SUCCESS: After N consecutive successes, multiply interval by speedup_factor
-3. ON 429 (Rate Limit): Multiply interval by backoff_factor (exponential backoff)
-4. ON OTHER ERROR: Multiply interval by 1.5 (moderate backoff)
+1. WAIT: Reserve next time slot, sleep outside lock until slot arrives
+2. ON SUCCESS: After N consecutive successes, speed up toward optimal
+3. ON 429 (Rate Limit): Update interval (no sleep — wait() handles timing)
+4. ON OTHER ERROR: Moderate backoff (1.5x)
 
 Usage:
 ------
@@ -50,6 +61,7 @@ Usage:
 """
 
 import time
+import random
 import threading
 from typing import Optional
 
@@ -77,7 +89,7 @@ class AdaptiveRateLimiter:
         max_interval: float = 120.0,      # Slowest allowed (1 req per 2 min)
         backoff_factor: float = 2.0,      # 2x slower on rate limit
         speedup_factor: float = 0.9,      # 10% faster after success streak
-        success_streak_to_speedup: int = 5  # Need 5 successes to speed up
+        success_streak_to_speedup: int = 3  # Need 3 successes to speed up (was 5)
     ):
         """
         Initialize the adaptive rate limiter.
@@ -100,25 +112,29 @@ class AdaptiveRateLimiter:
         self.speedup_factor = speedup_factor
         self.success_streak_to_speedup = success_streak_to_speedup
 
-        # Thread safety
+        # Thread safety — used for short critical sections only.
+        # wait() releases the lock BEFORE sleeping so other threads
+        # can reserve their own time slots concurrently.
         self._lock = threading.RLock()
 
         # Internal state (prefixed with _ to indicate private)
         self._current_interval = base_interval      # Current delay between requests
-        self._last_request_time: float = 0.0        # Timestamp of last request
+        self._next_allowed_time: float = 0.0        # Earliest time next request may fire
         self._consecutive_successes: int = 0        # Success streak counter
         self._total_requests: int = 0               # Total requests made
         self._total_rate_limits: int = 0            # Total 429s received
         self._total_successes: int = 0              # Total successful requests
 
         # Optimal rate discovery - track the boundaries
+        # fastest_accepted: smallest interval that got a 200 (fastest safe speed)
+        # slowest_rejected: largest interval that still got a 429 (slowest unsafe speed)
+        # When fastest_accepted > slowest_rejected, the boundary is bracketed
         self._fastest_accepted: float = base_interval   # Fastest interval that worked
         self._slowest_rejected: float = 0.0             # Slowest interval that got rate limited
         self._optimal_interval: Optional[float] = None  # Calculated optimal rate
 
         # Performance tracking
         self._start_time: float = time.time()
-        self._recent_intervals: list = []               # Last N intervals for averaging
     
     # =========================================================================
     # PROPERTIES - Read-only access to internal state
@@ -171,43 +187,58 @@ class AdaptiveRateLimiter:
         """
         Wait before making the next request.
 
-        This method should be called BEFORE every API request. It:
-        1. Calculates how long since the last request
-        2. Sleeps if needed to maintain the rate limit
-        3. Records the timestamp for the next calculation
-        4. Increments the request counter
+        This method should be called BEFORE every API request. It uses a
+        two-phase approach for thread safety without blocking:
+
+        Phase 1 (under lock): Reserve the next available time slot by
+            advancing _next_allowed_time. This is instant — no sleeping.
+        Phase 2 (lock released): Sleep until the reserved slot arrives.
+
+        This allows multiple threads to pipeline through the rate limiter:
+        - Thread A reserves slot at t=1.0, releases lock, sleeps until 1.0
+        - Thread B reserves slot at t=2.0, releases lock, sleeps until 2.0
+        - Both threads sleep concurrently without blocking each other.
 
         Example:
             >>> limiter.wait()  # May sleep up to current_interval
             >>> response = api.get("/endpoint")
             >>> limiter.on_success()
         """
+        # Phase 1: Reserve a time slot (fast, under lock)
         with self._lock:
-            # Get current time
             now = time.time()
 
-            # Calculate how long since last request
-            elapsed = now - self._last_request_time
+            # Ensure next_allowed_time is at least 'now'
+            if self._next_allowed_time < now:
+                self._next_allowed_time = now
 
-            # If not enough time has passed, wait
-            if elapsed < self._current_interval:
-                wait_time = self._current_interval - elapsed
-                # Only log if waiting more than 1 second (avoid log spam)
-                if wait_time > 1.0:
-                    logger.debug(f"[{self.name}] Rate limiting: waiting {wait_time:.1f}s")
-                time.sleep(wait_time)
+            # This thread's reserved slot
+            my_slot = self._next_allowed_time
 
-            # Record this request time for next calculation
-            self._last_request_time = time.time()
+            # Advance the slot for the next thread by current_interval
+            self._next_allowed_time += self._current_interval
             self._total_requests += 1
+
+        # Phase 2: Sleep until our reserved slot (lock is released)
+        sleep_time = my_slot - time.time()
+        if sleep_time > 0:
+            # Add ±10% jitter to prevent synchronized bursts
+            jitter = sleep_time * random.uniform(-0.1, 0.1)
+            sleep_time = max(0, sleep_time + jitter)
+            if sleep_time > 1.0:
+                logger.debug(f"[{self.name}] Rate limiting: waiting {sleep_time:.1f}s")
+            time.sleep(sleep_time)
 
     def on_success(self):
         """
         Call this method AFTER a successful API request (200 OK).
 
         Tracks consecutive successes and speeds up the request rate
-        after a streak of successful calls. This allows the limiter
-        to find the optimal speed automatically.
+        after a streak of successful calls. Uses a more aggressive
+        binary-search approach when an optimal interval is known —
+        jumps 75% of the way toward optimal instead of 50%, so
+        recovery after a rate-limit event takes ~6-9 requests
+        instead of ~15-30.
 
         Also tracks the fastest interval that was accepted to help
         calculate the optimal rate.
@@ -231,12 +262,12 @@ class AdaptiveRateLimiter:
 
             # Check if we've had enough successes to speed up
             if self._consecutive_successes >= self.success_streak_to_speedup:
-                # If we know the optimal, move toward it; otherwise use speedup_factor
                 if self._optimal_interval and self._current_interval > self._optimal_interval:
-                    # Move halfway toward optimal (binary search approach)
-                    new_interval = (self._current_interval + self._optimal_interval) / 2
+                    # Aggressive binary search: jump 75% toward optimal
+                    # (was 50% — the old midpoint approach recovered too slowly)
+                    new_interval = self._current_interval * 0.25 + self._optimal_interval * 0.75
                 else:
-                    # Standard speedup
+                    # Standard speedup (no optimal known yet)
                     new_interval = self._current_interval * self.speedup_factor
 
                 # Only apply if above minimum (don't go faster than allowed)
@@ -252,8 +283,10 @@ class AdaptiveRateLimiter:
         """
         Call this method when receiving a 429 Too Many Requests response.
 
-        Implements exponential backoff: each rate limit doubles the interval.
-        If the server provides a Retry-After header, uses that value instead.
+        Updates the interval and pushes _next_allowed_time into the future
+        so the next wait() call will respect the cooldown. Does NOT sleep
+        here — sleeping is handled by wait() on the next iteration, which
+        eliminates the old double-sleep problem.
 
         Also tracks the slowest interval that was rejected to help
         calculate the optimal rate (the sweet spot between accepted and rejected).
@@ -282,8 +315,8 @@ class AdaptiveRateLimiter:
             self._calculate_optimal()
 
             if retry_after:
-                # Server told us exactly how long to wait - use that
-                wait_time = retry_after
+                # Server told us exactly how long to wait
+                cooldown = retry_after
                 self._current_interval = min(retry_after, self.max_interval)
             else:
                 # If we know the optimal, jump to it with a safety margin
@@ -296,13 +329,16 @@ class AdaptiveRateLimiter:
                         self._current_interval * self.backoff_factor,
                         self.max_interval
                     )
-                wait_time = self._current_interval
+                cooldown = self._current_interval
 
-            # Log warning and wait
+            # Push _next_allowed_time into the future so the next wait()
+            # call will enforce the cooldown. No sleeping here.
+            now = time.time()
+            self._next_allowed_time = max(self._next_allowed_time, now + cooldown)
+
             logger.warning(f"[{self.name}] Rate limit hit #{self._total_rate_limits}! "
                           f"Interval: {self._current_interval:.2f}s ({60/self._current_interval:.1f} req/min). "
-                          f"Waiting {wait_time:.1f}s...")
-            time.sleep(wait_time)
+                          f"Cooldown {cooldown:.1f}s before next request.")
 
     def on_error(self):
         """
@@ -354,33 +390,40 @@ class AdaptiveRateLimiter:
         pause where the API may have recovered.
 
         Args:
-            keep_optimal: If True, preserves learned optimal rate for next session.
+            keep_optimal: If True, preserves learned optimal rate and boundaries
+                         for the next session, but resets counters so stats
+                         (actual_rpm, etc.) are accurate for the new batch.
                          If False, resets everything including learned boundaries.
 
         Example:
-            >>> limiter.reset()  # Back to base_interval, keep learned rate
+            >>> limiter.reset()  # Back to optimal, keep learned rate
             >>> limiter.reset(keep_optimal=False)  # Full reset
         """
-        # If we learned an optimal rate, start there instead of base
-        if keep_optimal and self._optimal_interval:
-            self._current_interval = self._optimal_interval
-            logger.info(f"[{self.name}] Rate limiter reset to optimal {self._optimal_interval:.3f}s "
-                       f"({60/self._optimal_interval:.1f} req/min)")
-        else:
-            self._current_interval = self.base_interval
-            logger.info(f"[{self.name}] Rate limiter reset to base {self.base_interval}s interval")
+        with self._lock:
+            # If we learned an optimal rate, start there instead of base
+            if keep_optimal and self._optimal_interval:
+                self._current_interval = self._optimal_interval
+                logger.info(f"[{self.name}] Rate limiter reset to optimal {self._optimal_interval:.3f}s "
+                           f"({60/self._optimal_interval:.1f} req/min)")
+            else:
+                self._current_interval = self.base_interval
+                logger.info(f"[{self.name}] Rate limiter reset to base {self.base_interval}s interval")
 
-        self._consecutive_successes = 0
-        self._start_time = time.time()
+            # Always reset timing and streak state
+            self._consecutive_successes = 0
+            self._next_allowed_time = 0.0
+            self._start_time = time.time()
 
-        if not keep_optimal:
-            # Full reset - forget learned boundaries
-            self._fastest_accepted = self.base_interval
-            self._slowest_rejected = 0.0
-            self._optimal_interval = None
+            # Always reset counters so stats reflect the new batch
             self._total_requests = 0
             self._total_successes = 0
             self._total_rate_limits = 0
+
+            if not keep_optimal:
+                # Full reset - also forget learned boundaries
+                self._fastest_accepted = self.base_interval
+                self._slowest_rejected = 0.0
+                self._optimal_interval = None
 
     def get_status_line(self) -> str:
         """

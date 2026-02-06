@@ -2257,7 +2257,11 @@ class SyncGUI:
 
             # Parallel Execution
             import concurrent.futures
-            max_workers = 5
+            # 2 workers is optimal — the rate limiter serializes requests via
+            # _next_allowed_time slots, so more threads just queue up waiting.
+            # 2 threads allow one to sleep while the other fires, keeping the
+            # pipeline full without wasting OS resources on idle threads.
+            max_workers = 2
             
             fetched = 0
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
