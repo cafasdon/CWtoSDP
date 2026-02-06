@@ -288,8 +288,8 @@ def load_sdp_config() -> ServiceDeskPlusConfig:
         >>> sdp_config = load_sdp_config()
         >>> client = ServiceDeskPlusClient(sdp_config)
     """
-    # Load environment variables from default .env file
-    load_dotenv()
+    # Load environment variables from credentials.env file
+    load_dotenv("credentials.env")
 
     # Get required credentials
     sdp_client_id = os.getenv("ZOHO_CLIENT_ID")

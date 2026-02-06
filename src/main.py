@@ -168,7 +168,7 @@ def fetch_connectwise_data(config: AppConfig) -> dict:
         return {"devices": basic_devices, "sites": [], "companies": []}
 
     # Parallel execution configuration
-    max_workers = 5
+    max_workers = 2
     logger.info(f"Fetching full details for {len(basic_devices)} devices using {max_workers} threads...")
 
     import concurrent.futures

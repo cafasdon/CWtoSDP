@@ -1204,6 +1204,14 @@ class SyncGUI:
             except Exception as e:
                 logger.error(f"Failed to build sync preview: {e}")
                 messagebox.showerror("Error", f"Failed to build sync preview: {e}")
+                self.items = []
+                self.summary = {"total": 0, "by_action": {}, "by_category": {}, "by_ci_type": {}}
+                self._update_stats_with_availability(availability)
+                self._populate_tree()
+                self._populate_category_tab()
+                self._populate_diff_tab()
+                self._populate_fulldb_tab()
+                self._update_filters()
                 return
 
         # Partial data - show what we have without matching
@@ -1316,8 +1324,9 @@ class SyncGUI:
         ]
 
         for text, color in stats:
-            lbl = ttk.Label(self.stats_frame, text=text, font=("Segoe UI", 11, "bold"))
+            lbl = ttk.Label(self.stats_frame, text=text, font=("Segoe UI", 11, "bold"), foreground=color)
             lbl.pack(side=tk.LEFT, padx=8)
+
     def _update_filters(self):
         """Update filter dropdowns."""
         categories = ["All"] + sorted(self.summary.get("by_category", {}).keys())
