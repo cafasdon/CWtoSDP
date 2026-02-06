@@ -36,7 +36,7 @@ Usage:
     # Show what would be synced without fetching new data:
     python run_sync.py --preview-only
 
-Author: DMH Stallard IT Team
+Author: Rodrigo Quintian
 Version: 1.0.0
 """
 

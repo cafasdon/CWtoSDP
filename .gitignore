@@ -3,6 +3,7 @@ credentials.env
 *.env
 secrets*.txt
 .env.*
+setup_github_secrets*
 
 # Python
 __pycache__/

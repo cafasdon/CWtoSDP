@@ -164,7 +164,7 @@ https://sdpondemand.manageengine.eu/api/v3/
 | Field          | Type     | Description                                     |
 | -------------- | -------- | ----------------------------------------------- |
 | `id`           | long     | Unique request ID                               |
-| `display_id`   | string   | Display ID (e.g., "DMHIT-47")                   |
+| `display_id`   | string   | Display ID (e.g., "REQ-47")                      |
 | `subject`      | string   | Request subject (max 250 chars)                 |
 | `description`  | html     | Request description                             |
 | `status`       | object   | `{id, name, color, in_progress, stop_timer}`    |
@@ -265,7 +265,7 @@ or
 ```json
 {
   "ref_owned_by": {
-    "id": "11873000000123456"
+    "id": "10000000000123456"
   }
 }
 ```
@@ -354,25 +354,25 @@ curl -X GET "https://sdpondemand.manageengine.eu/api/v3/cmdb/ci_workstation?list
 
 ---
 
-## 8. Live Data Examples (from DMH Stallard Instance)
+## 8. Sample Data Examples
 
 ### 8.1 Sample Workstations Retrieved
 
 | Name            | Model              | Manufacturer | OS             | Serial     | IP            |
 | --------------- | ------------------ | ------------ | -------------- | ---------- | ------------- |
-| DESKTOP-2974G47 | HP ProBook 450 G7  | HP           | Win 11 Pro x64 | 5CD038D9FK | 192.168.1.188 |
-| DESKTOP-2C4AGHS | HP ProBook 450 G7  | HP           | Win 11 Pro x64 | 5CD038D9D2 | 192.168.0.110 |
-| DESKTOP-OQGU3H5 | ThinkPad L14 Gen 2 | LENOVO       | Win 11 Pro x64 | PF3VGE79   | 172.19.30.32  |
-| DHM09749        | ThinkPad L14 Gen 2 | LENOVO       | Win 11 Pro x64 | PF3VQ1SM   | 172.19.20.21  |
-| DMH008537       | HP ProBook 450 G7  | HP           | Win 11 Pro x64 | 5CD038D9D6 | 192.168.0.154 |
+| DESKTOP-ABC1234 | HP ProBook 450 G7  | HP           | Win 11 Pro x64 | 5CD0XXXXFK | 192.168.1.100 |
+| DESKTOP-DEF5678 | HP ProBook 450 G7  | HP           | Win 11 Pro x64 | 5CD0XXXXD2 | 192.168.1.101 |
+| DESKTOP-GHI9012 | ThinkPad L14 Gen 2 | LENOVO       | Win 11 Pro x64 | PF3VXXXX   | 10.0.0.50     |
+| LAPTOP-001      | ThinkPad L14 Gen 2 | LENOVO       | Win 11 Pro x64 | PF3VYYYY   | 10.0.0.51     |
+| WORKSTATION-002 | HP ProBook 450 G7  | HP           | Win 11 Pro x64 | 5CD0XXXXD6 | 192.168.1.102 |
 
 ### 8.2 Sites
 
-| Site     | ID                | Default |
-| -------- | ----------------- | ------- |
-| Gatwick  | 11873000000233001 | Yes     |
-| London   | 11873000000227121 | No      |
-| Brighton | 11873000005913161 | No      |
+| Site         | ID                | Default |
+| ------------ | ----------------- | ------- |
+| Main Office  | 10000000000233001 | Yes     |
+| Branch North | 10000000000227121 | No      |
+| Branch South | 10000000005913161 | No      |
 
 ---
 
