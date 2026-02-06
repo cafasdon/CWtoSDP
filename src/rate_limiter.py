@@ -42,6 +42,8 @@ Algorithm:
 2. ON SUCCESS: After N consecutive successes, speed up toward optimal
 3. ON 429 (Rate Limit): Update interval (no sleep — wait() handles timing)
 4. ON OTHER ERROR: Moderate backoff (1.5x)
+5. RECOVERY: After sustained success, decay rate-limit boundaries so the
+   limiter gradually re-probes faster speeds toward min_interval
 
 Usage:
 ------
@@ -89,7 +91,8 @@ class AdaptiveRateLimiter:
         max_interval: float = 120.0,      # Slowest allowed (1 req per 2 min)
         backoff_factor: float = 2.0,      # 2x slower on rate limit
         speedup_factor: float = 0.9,      # 10% faster after success streak
-        success_streak_to_speedup: int = 3  # Need 3 successes to speed up (was 5)
+        success_streak_to_speedup: int = 3,  # Need 3 successes to speed up
+        recovery_threshold: int = 10      # Successes before decaying boundaries
     ):
         """
         Initialize the adaptive rate limiter.
@@ -102,6 +105,8 @@ class AdaptiveRateLimiter:
             backoff_factor: How much to slow down on rate limit (2.0 = double)
             speedup_factor: How much to speed up on success (0.9 = 10% faster)
             success_streak_to_speedup: Consecutive successes needed to speed up
+            recovery_threshold: Consecutive successes after last rate limit before
+                               boundaries start decaying (allows re-probing faster speeds)
         """
         # Configuration
         self.name = name
@@ -111,6 +116,7 @@ class AdaptiveRateLimiter:
         self.backoff_factor = backoff_factor
         self.speedup_factor = speedup_factor
         self.success_streak_to_speedup = success_streak_to_speedup
+        self.recovery_threshold = recovery_threshold
 
         # Thread safety — used for short critical sections only.
         # wait() releases the lock BEFORE sleeping so other threads
@@ -124,6 +130,7 @@ class AdaptiveRateLimiter:
         self._total_requests: int = 0               # Total requests made
         self._total_rate_limits: int = 0            # Total 429s received
         self._total_successes: int = 0              # Total successful requests
+        self._successes_since_rate_limit: int = 0   # Successes since last 429 (for recovery)
 
         # Optimal rate discovery - track the boundaries
         # fastest_accepted: smallest interval that got a 200 (fastest safe speed)
@@ -240,8 +247,10 @@ class AdaptiveRateLimiter:
         recovery after a rate-limit event takes ~6-9 requests
         instead of ~15-30.
 
-        Also tracks the fastest interval that was accepted to help
-        calculate the optimal rate.
+        After sustained success (recovery_threshold consecutive successes
+        since the last rate limit), gradually decays the rate-limit
+        boundaries so the limiter can re-probe faster speeds and
+        eventually reach min_interval.
 
         Example:
             >>> if response.status_code == 200:
@@ -251,11 +260,28 @@ class AdaptiveRateLimiter:
             # Track success
             self._consecutive_successes += 1
             self._total_successes += 1
+            self._successes_since_rate_limit += 1
 
             # Track fastest accepted interval (this rate worked!)
             if self._current_interval < self._fastest_accepted:
                 self._fastest_accepted = self._current_interval
                 logger.debug(f"[{self.name}] New fastest accepted: {self._fastest_accepted:.3f}s")
+
+            # Decay boundaries after sustained success (no rate limits for a while)
+            # This allows the limiter to gradually forget old rate-limit boundaries
+            # and re-probe faster speeds, eventually reaching min_interval.
+            if (self._slowest_rejected > 0
+                    and self._successes_since_rate_limit >= self.recovery_threshold):
+                self._slowest_rejected *= self.speedup_factor  # Decay by same factor
+                if self._slowest_rejected < self.min_interval:
+                    # Boundary has decayed below minimum — clear it entirely
+                    self._slowest_rejected = 0.0
+                    self._optimal_interval = None
+                    logger.info(f"[{self.name}] Rate-limit boundary fully decayed — "
+                               f"re-probing toward min interval ({self.min_interval:.3f}s)")
+                else:
+                    logger.debug(f"[{self.name}] Decaying rate-limit boundary: "
+                                f"slowest_rejected now {self._slowest_rejected:.3f}s")
 
             # Recalculate optimal interval if we have both boundaries
             self._calculate_optimal()
@@ -267,7 +293,7 @@ class AdaptiveRateLimiter:
                     # (was 50% — the old midpoint approach recovered too slowly)
                     new_interval = self._current_interval * 0.25 + self._optimal_interval * 0.75
                 else:
-                    # Standard speedup (no optimal known yet)
+                    # Standard speedup (no optimal known yet, or already at/below optimal)
                     new_interval = self._current_interval * self.speedup_factor
 
                 # Only apply if above minimum (don't go faster than allowed)
@@ -301,8 +327,9 @@ class AdaptiveRateLimiter:
             ...     limiter.on_rate_limit(int(retry) if retry else None)
         """
         with self._lock:
-            # Reset success streak (we just failed)
+            # Reset success streak and recovery counter (we just failed)
             self._consecutive_successes = 0
+            self._successes_since_rate_limit = 0
             self._total_rate_limits += 1
 
             # Track the slowest rejected interval (this rate was too fast!)
@@ -411,6 +438,7 @@ class AdaptiveRateLimiter:
 
             # Always reset timing and streak state
             self._consecutive_successes = 0
+            self._successes_since_rate_limit = 0
             self._next_allowed_time = 0.0
             self._start_time = time.time()
 
