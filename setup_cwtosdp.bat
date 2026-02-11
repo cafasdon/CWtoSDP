@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================================
-REM  CWtoSDP — One-Click Installer for Windows
+REM  CWtoSDP - One-Click Installer for Windows
 REM ============================================================================
 REM
 REM  HOW TO USE:
@@ -8,31 +8,20 @@ REM    1. Download this file
 REM    2. Double-click it
 REM    3. That's it!
 REM
-REM  This script will:
-REM    - Install Python automatically if you don't have it
-REM    - Download the latest CWtoSDP from GitHub
-REM    - Set everything up
-REM    - Create a Desktop shortcut
-REM    - Launch the application
-REM
 REM ============================================================================
 
 title CWtoSDP Installer
 mode con: cols=80 lines=40
-chcp 65001 >nul
 setlocal enabledelayedexpansion
 
-REM Get the script's own directory (for re-launch detection)
+REM Get the script's own directory
 set "SCRIPT_DIR=%~dp0"
 
 echo.
-echo  ╔═══════════════════════════════════════════════════════╗
-echo  ║                                                       ║
-echo  ║          CWtoSDP — One-Click Installer                ║
-echo  ║                                                       ║
-echo  ║   ConnectWise to ServiceDesk Plus Integration         ║
-echo  ║                                                       ║
-echo  ╚═══════════════════════════════════════════════════════╝
+echo  =======================================================
+echo  CWtoSDP - One-Click Installer
+echo  ConnectWise to ServiceDesk Plus Integration
+echo  =======================================================
 echo.
 
 REM ============================================================================
@@ -56,9 +45,9 @@ REM ============================================================================
 REM  STEP 2: Check / Install Python
 REM ============================================================================
 
-echo  ┌─────────────────────────────────────────────────────┐
-echo  │  Step 1 of 4: Checking Python...                    │
-echo  └─────────────────────────────────────────────────────┘
+echo  -------------------------------------------------------
+echo  Step 1 of 4: Checking Python...
+echo  -------------------------------------------------------
 echo.
 
 REM Try python first, then python3, then py
@@ -88,7 +77,7 @@ echo.
 echo  Attempting to install Python automatically...
 echo.
 
-REM Try winget first (available on Windows 10 1709+ and Windows 11)
+REM Try winget first
 winget --version >nul 2>&1
 if not errorlevel 1 (
     echo  [....] Installing Python via Windows Package Manager...
@@ -98,13 +87,10 @@ if not errorlevel 1 (
     if not errorlevel 1 (
         echo  [OK] Python installed successfully!
         echo.
-        echo  ╔═══════════════════════════════════════════════════════╗
-        echo  ║  Python was just installed. To pick up the new PATH  ║
-        echo  ║  settings, this installer needs to restart itself.   ║
-        echo  ║                                                      ║
-        echo  ║  Please close this window and DOUBLE-CLICK the       ║
-        echo  ║  setup file again.                                   ║
-        echo  ╚═══════════════════════════════════════════════════════╝
+        echo  =======================================================
+        echo  Python was just installed.
+        echo  Please close this window and run the installer again.
+        echo  =======================================================
         echo.
         pause
         exit /b 0
@@ -114,11 +100,11 @@ if not errorlevel 1 (
     )
 )
 
-REM Winget not available or failed — try direct download
+REM Winget not available or failed -- try direct download
 echo  [....] Finding latest Python version from python.org...
 set "PY_INSTALLER=%TEMP%\python_installer.exe"
 
-REM Dynamically resolve the latest Python Windows installer URL (never hardcoded)
+REM Dynamically resolve the latest Python Windows installer URL
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; " ^
     "try { " ^
@@ -149,13 +135,10 @@ if exist "%PY_INSTALLER%" (
         echo  [OK] Python installed successfully!
         del "%PY_INSTALLER%" 2>nul
         echo.
-        echo  ╔═══════════════════════════════════════════════════════╗
-        echo  ║  Python was just installed. To pick up the new PATH  ║
-        echo  ║  settings, this installer needs to restart itself.   ║
-        echo  ║                                                      ║
-        echo  ║  Please close this window and DOUBLE-CLICK the       ║
-        echo  ║  setup file again.                                   ║
-        echo  ╚═══════════════════════════════════════════════════════╝
+        echo  =======================================================
+        echo  Python was just installed.
+        echo  Please close this window and run the installer again.
+        echo  =======================================================
         echo.
         pause
         exit /b 0
@@ -168,15 +151,10 @@ if exist "%PY_INSTALLER%" (
 )
 
 echo.
-echo  ╔═══════════════════════════════════════════════════════╗
-echo  ║  Could not install Python automatically.             ║
-echo  ║                                                      ║
-echo  ║  Please install Python manually:                     ║
-echo  ║  1. Go to https://python.org/downloads               ║
-echo  ║  2. Download Python 3.12 or newer                    ║
-echo  ║  3. CHECK "Add Python to PATH" during install        ║
-echo  ║  4. Run this installer again                         ║
-echo  ╚═══════════════════════════════════════════════════════╝
+echo  =======================================================
+echo  Could not install Python automatically.
+echo  Please install Python manually from python.org
+echo  =======================================================
 echo.
 start https://www.python.org/downloads/
 pause
@@ -202,9 +180,9 @@ REM ============================================================================
 REM  STEP 3: Download CWtoSDP from GitHub
 REM ============================================================================
 
-echo  ┌─────────────────────────────────────────────────────┐
-echo  │  Step 2 of 4: Downloading CWtoSDP...                │
-echo  └─────────────────────────────────────────────────────┘
+echo  -------------------------------------------------------
+echo  Step 2 of 4: Downloading CWtoSDP...
+echo  -------------------------------------------------------
 echo.
 
 if exist "%INSTALL_DIR%\src\main.py" (
@@ -250,6 +228,7 @@ echo  [....] Extracting files...
 
 REM Clean up any previous extraction
 if exist "%EXTRACT_DIR%" rmdir /s /q "%EXTRACT_DIR%" 2>nul
+if not exist "%EXTRACT_DIR%" mkdir "%EXTRACT_DIR%"
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "Expand-Archive -Path '%ZIP_FILE%' -DestinationPath '%EXTRACT_DIR%' -Force"
@@ -264,7 +243,7 @@ if errorlevel 1 (
 REM Move from CWtoSDP-main subfolder to install location
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
 
-REM The ZIP extracts to CWtoSDP-main/  — copy contents to install dir
+REM The ZIP extracts to CWtoSDP-main/ - copy contents to install dir
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "Get-ChildItem '%EXTRACT_DIR%\CWtoSDP-main\*' | Copy-Item -Destination '%INSTALL_DIR%' -Recurse -Force"
 
@@ -276,9 +255,8 @@ if exist "%INSTALL_DIR%\src\main.py" (
     echo  [OK] Extracted to %INSTALL_DIR%
     echo.
 ) else (
-    echo  [ERROR] Extraction failed — src\main.py not found.
-    echo         Please try again or download manually from:
-    echo         https://github.com/cafasdon/CWtoSDP
+    echo  [ERROR] Extraction failed - src\main.py not found.
+    echo         Please try again or download manually from GitHub.
     echo.
     pause
     exit /b 1
@@ -290,9 +268,9 @@ REM ============================================================================
 REM  STEP 4: Set up the application (venv + dependencies)
 REM ============================================================================
 
-echo  ┌─────────────────────────────────────────────────────┐
-echo  │  Step 3 of 4: Setting up the application...         │
-echo  └─────────────────────────────────────────────────────┘
+echo  -------------------------------------------------------
+echo  Step 3 of 4: Setting up the application...
+echo  -------------------------------------------------------
 echo.
 
 pushd "%INSTALL_DIR%"
@@ -338,9 +316,9 @@ REM ============================================================================
 REM  STEP 5: Create Desktop shortcut
 REM ============================================================================
 
-echo  ┌─────────────────────────────────────────────────────┐
-echo  │  Step 4 of 4: Creating Desktop shortcut...          │
-echo  └─────────────────────────────────────────────────────┘
+echo  -------------------------------------------------------
+echo  Step 4 of 4: Creating Desktop shortcut...
+echo  -------------------------------------------------------
 echo.
 
 set "SHORTCUT=%USERPROFILE%\Desktop\CWtoSDP.bat"
@@ -363,20 +341,10 @@ REM  DONE! Launch the application
 REM ============================================================================
 
 echo.
-echo  ╔═══════════════════════════════════════════════════════╗
-echo  ║                                                       ║
-echo  ║          Installation Complete!                       ║
-echo  ║                                                       ║
-echo  ║   Installed to: %INSTALL_DIR%
-echo  ║                                                       ║
-echo  ║   To launch in the future:                            ║
-echo  ║     • Double-click "CWtoSDP" on your Desktop          ║
-echo  ║     • Or double-click start.bat in the install folder  ║
-echo  ║                                                       ║
-echo  ║   First time? Click the gear icon to add your         ║
-echo  ║   API credentials once the app opens.                 ║
-echo  ║                                                       ║
-echo  ╚═══════════════════════════════════════════════════════╝
+echo  =======================================================
+echo  Installation Complete!
+echo  Installed to: %INSTALL_DIR%
+echo  =======================================================
 echo.
 echo  Launching CWtoSDP now...
 echo.
