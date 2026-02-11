@@ -159,7 +159,7 @@ class AppConfig:
 # CONFIGURATION LOADING FUNCTIONS
 # =============================================================================
 
-def load_config(env_file: Optional[str] = None) -> AppConfig:
+def load_config(env_file: Optional[str] = None, allow_missing: bool = False) -> AppConfig:
     """
     Load complete application configuration from environment variables.
 
@@ -205,7 +205,7 @@ def load_config(env_file: Optional[str] = None) -> AppConfig:
 
     # Fail fast if credentials are missing - better to error early than
     # fail later during an API call
-    if not cw_client_id or not cw_client_secret:
+    if (not cw_client_id or not cw_client_secret) and not allow_missing:
         raise ValueError(
             "Missing ConnectWise credentials. "
             "Set CLIENT_ID and CLIENT_SECRET in environment."
@@ -219,7 +219,7 @@ def load_config(env_file: Optional[str] = None) -> AppConfig:
     sdp_refresh_token = os.getenv("ZOHO_REFRESH_TOKEN")
 
     # all() returns True only if all values are truthy (not None/empty)
-    if not all([sdp_client_id, sdp_client_secret, sdp_refresh_token]):
+    if not all([sdp_client_id, sdp_client_secret, sdp_refresh_token]) and not allow_missing:
         raise ValueError(
             "Missing ServiceDesk Plus credentials. "
             "Set ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, and ZOHO_REFRESH_TOKEN in environment."
@@ -231,17 +231,17 @@ def load_config(env_file: Optional[str] = None) -> AppConfig:
 
     # Create ConnectWise configuration with optional URL override
     cw_config = ConnectWiseConfig(
-        client_id=cw_client_id,
-        client_secret=cw_client_secret,
+        client_id=cw_client_id or "",
+        client_secret=cw_client_secret or "",
         # Allow overriding base URL for different data centers
         base_url=os.getenv("CW_BASE_URL", "https://openapi.service.euplatform.connectwise.com"),
     )
 
     # Create ServiceDesk Plus configuration with optional URL overrides
     sdp_config = ServiceDeskPlusConfig(
-        client_id=sdp_client_id,
-        client_secret=sdp_client_secret,
-        refresh_token=sdp_refresh_token,
+        client_id=sdp_client_id or "",
+        client_secret=sdp_client_secret or "",
+        refresh_token=sdp_refresh_token or "",
         # These URLs vary by data center (EU, US, IN, AU)
         accounts_url=os.getenv("ZOHO_ACCOUNTS_URL", "https://accounts.zoho.eu"),
         api_base_url=os.getenv("SDP_API_BASE_URL", "https://sdpondemand.manageengine.eu/api/v3"),
@@ -270,7 +270,7 @@ def load_config(env_file: Optional[str] = None) -> AppConfig:
     )
 
 
-def load_sdp_config() -> ServiceDeskPlusConfig:
+def load_sdp_config(allow_missing: bool = False) -> ServiceDeskPlusConfig:
     """
     Load only the ServiceDesk Plus configuration.
 
@@ -283,6 +283,7 @@ def load_sdp_config() -> ServiceDeskPlusConfig:
 
     Raises:
         ValueError: If required ZOHO_* environment variables are missing
+                    (unless allow_missing is True)
 
     Example:
         >>> sdp_config = load_sdp_config()
@@ -297,7 +298,7 @@ def load_sdp_config() -> ServiceDeskPlusConfig:
     sdp_refresh_token = os.getenv("ZOHO_REFRESH_TOKEN")
 
     # Validate all required values are present
-    if not all([sdp_client_id, sdp_client_secret, sdp_refresh_token]):
+    if not all([sdp_client_id, sdp_client_secret, sdp_refresh_token]) and not allow_missing:
         raise ValueError(
             "Missing ServiceDesk Plus credentials. "
             "Set ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, and ZOHO_REFRESH_TOKEN."
@@ -305,9 +306,9 @@ def load_sdp_config() -> ServiceDeskPlusConfig:
 
     # Build and return SDP-specific configuration
     return ServiceDeskPlusConfig(
-        client_id=sdp_client_id,
-        client_secret=sdp_client_secret,
-        refresh_token=sdp_refresh_token,
+        client_id=sdp_client_id or "",
+        client_secret=sdp_client_secret or "",
+        refresh_token=sdp_refresh_token or "",
         accounts_url=os.getenv("ZOHO_ACCOUNTS_URL", "https://accounts.zoho.eu"),
         api_base_url=os.getenv("SDP_API_BASE_URL", "https://sdpondemand.manageengine.eu/api/v3"),
         scopes=os.getenv("SCOPES", "SDPOnDemand.assets.ALL,SDPOnDemand.cmdb.ALL,SDPOnDemand.requests.READ"),

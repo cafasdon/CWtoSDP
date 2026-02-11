@@ -18,6 +18,8 @@ REM
 REM ============================================================================
 
 title CWtoSDP Installer
+mode con: cols=80 lines=40
+chcp 65001 >nul
 setlocal enabledelayedexpansion
 
 REM Get the script's own directory (for re-launch detection)

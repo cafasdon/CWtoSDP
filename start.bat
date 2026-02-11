@@ -10,6 +10,7 @@ REM   4. Launches the Sync Manager GUI
 REM ============================================
 
 title CWtoSDP
+chcp 65001 >nul
 
 REM Get the directory where this script is located
 cd /d "%~dp0"

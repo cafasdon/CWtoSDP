@@ -368,8 +368,12 @@ def main():
     # =========================================================================
 
     try:
+        # Determine if we are launching a GUI
+        is_gui_mode = bool(args.sync or args.gui or args.match)
+
         # Load configuration from environment file
-        config = load_config(args.env_file)
+        # Allow missing credentials in GUI mode so user can enter them in Settings
+        config = load_config(args.env_file, allow_missing=is_gui_mode)
         # Apply dry_run setting from command line
         config.dry_run = args.dry_run
     except ValueError as e:
