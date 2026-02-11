@@ -6,15 +6,40 @@
 
 Integration tool for syncing device/asset data between **ConnectWise RMM** and **ManageEngine ServiceDesk Plus Cloud** CMDB. Includes a full GUI for interactive use and CLI scripts for automated scheduled syncs.
 
-## 🚀 Quick Start
+## 🖥️ Easy Installation (Windows)
 
-### Prerequisites
+> **You don't need Python, Git, or any technical knowledge.** One file does everything.
 
-- **Python 3.8+** ([Download](https://www.python.org/downloads/))
-- **ConnectWise RMM** admin access for API keys
-- **ServiceDesk Plus Cloud** access for Zoho OAuth setup
+**1.** [**⬇️ Download setup_cwtosdp.bat**](https://raw.githubusercontent.com/cafasdon/CWtoSDP/main/setup_cwtosdp.bat) *(right-click → "Save link as")*
+**2.** Double-click the downloaded file.
+**3.** That's it. The app will open.
 
-### Installation
+**What it does automatically:**
+- ✅ Installs Python (if you don't have it)
+- ✅ Downloads the latest CWtoSDP from GitHub
+- ✅ Installs all dependencies
+- ✅ Creates a **Desktop shortcut** for next time
+- ✅ Launches the app
+
+> [!TIP]
+> After the first install, just double-click **CWtoSDP** on your Desktop to launch.
+
+### First Time Setup
+
+1. Click **⚙️ Settings** in the app
+2. Enter your API credentials ([how to get them](SETUP.md))
+3. Click **Test Connections** → **Save**
+4. Click **🔄 CW** and **🔄 SDP** to fetch data
+5. Review the sync preview and execute when ready
+
+---
+
+### Alternative Install (macOS / Linux / Manual)
+
+<details>
+<summary>Click to expand</summary>
+
+**Prerequisites:** Python 3.8+ ([Download](https://www.python.org/downloads/))
 
 | Platform | Command |
 |----------|---------|
@@ -22,18 +47,17 @@ Integration tool for syncing device/asset data between **ConnectWise RMM** and *
 | **macOS** | Double-click `start.command` |
 | **Linux** | `chmod +x start.sh && ./start.sh` |
 
-The launcher will automatically create a virtual environment, install dependencies, and open the GUI.
+Or install manually:
 
-### First Time Setup
+```bash
+git clone https://github.com/cafasdon/CWtoSDP.git
+cd CWtoSDP
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+python -m src.main --sync
+```
 
-1. Launch the app using the commands above
-2. Click **⚙️ Settings**
-3. Enter your API credentials (see [SETUP.md](SETUP.md) for how to get them)
-4. Click **Test Connections** → **Save**
-5. Click **🔄 CW** and **🔄 SDP** to fetch data
-6. Review the sync preview and execute when ready
-
-📖 **Need detailed instructions?** See the complete [Setup Guide](SETUP.md)
+</details>
 
 ---
 
@@ -59,7 +83,11 @@ The launcher will automatically create a virtual environment, install dependenci
 
 ## 📦 Installation Options
 
-### Option 1: One-Click Start (Recommended)
+### Option 1: One-File Installer (Recommended for New Users)
+
+Download and double-click [`setup_cwtosdp.bat`](https://raw.githubusercontent.com/cafasdon/CWtoSDP/main/setup_cwtosdp.bat) — it does everything automatically (installs Python, downloads the app, creates a shortcut, launches).
+
+### Option 2: One-Click Start (If You Have the Repo)
 
 | Platform | Command |
 |----------|---------|
@@ -67,7 +95,7 @@ The launcher will automatically create a virtual environment, install dependenci
 | **macOS** | Double-click `start.command` |
 | **Linux** | `./start.sh` |
 
-### Option 2: Manual Install
+### Option 3: Manual Install
 
 ```bash
 # Clone repository
@@ -437,6 +465,7 @@ CWtoSDP/
 ├── data/                         # SQLite databases (auto-created)
 ├── logs/                         # Application and sync result logs
 ├── docs/                         # API reference documentation
+├── setup_cwtosdp.bat             # ⭐ One-file installer (download & run)
 ├── start.bat/.command/.sh        # One-click installer + launcher
 ├── install.bat/.command/.sh      # Standalone installer
 ├── launch_sync.bat/.command/.sh  # GUI-only launcher (no install)

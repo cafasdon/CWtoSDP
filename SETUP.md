@@ -35,7 +35,15 @@ python --version
 
 ## Installation
 
-### Option 1: One-Click Install (Recommended)
+### Option 1: One-File Installer (Easiest — Recommended)
+
+1. Download [`setup_cwtosdp.bat`](https://raw.githubusercontent.com/cafasdon/CWtoSDP/main/setup_cwtosdp.bat) (right-click → Save Link As)
+2. Double-click the downloaded file
+3. Done! Python will be installed if needed, the app is downloaded and launched automatically.
+
+A Desktop shortcut (`CWtoSDP.bat`) is created for future launches.
+
+### Option 2: One-Click Start (If You Already Have the Repo)
 
 | Platform | Steps |
 |----------|-------|
@@ -50,7 +58,7 @@ The start script will automatically:
 3. Install dependencies
 4. Launch the GUI
 
-### Option 2: Manual Install
+### Option 3: Manual Install
 
 ```bash
 # Clone the repository
