@@ -297,12 +297,17 @@ class SyncEngine:
 
             if match:
                 # Match found → UPDATE action
+                # IMPORTANT: Use "ci_workstation" for updates because that's the
+                # CMDB type the record was fetched from. CW classification (e.g.
+                # "ci_virtual_machine") is used for display/categorization only.
+                # Using the wrong ci_type causes 404 on PUT because the CI doesn't
+                # exist under that type in SDP's CMDB.
                 sdp_id, sdp_name, match_reason, existing_fields = match
                 item = SyncItem(
                     cw_id=cw_id,
                     cw_name=device.get("friendlyName", ""),
                     cw_category=category,
-                    sdp_ci_type=sdp_ci_type,
+                    sdp_ci_type="ci_workstation",
                     action=SyncAction.UPDATE,
                     sdp_id=sdp_id,
                     sdp_name=sdp_name,
