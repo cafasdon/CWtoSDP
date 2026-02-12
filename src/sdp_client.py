@@ -392,8 +392,8 @@ class ServiceDeskPlusClient:
                 resp = requests.request(method, url, **request_kwargs)
 
                 # Handle response based on status code
-                if resp.status_code == 200:
-                    # Success - inform rate limiter and return data
+                if 200 <= resp.status_code < 300:
+                    # Success (200 OK, 201 Created, etc.) - inform rate limiter
                     self.rate_limiter.on_success()
                     return resp.json()
 
@@ -688,11 +688,12 @@ class ServiceDeskPlusClient:
         endpoint = f"/cmdb/{ci_type}"
 
         try:
+            logger.debug(f"CREATE payload for {ci_type}: {json.dumps(ci_data, indent=2)}")
             result = self._make_request("POST", endpoint, data=ci_data)
             logger.info(f"Created {ci_type}: {data.get('name', 'unknown')}")
             return result
         except ServiceDeskPlusClientError as e:
-            logger.error(f"Failed to create {ci_type}: {e}")
+            logger.error(f"Failed to create {ci_type} '{data.get('name', 'unknown')}': {e}")
             return None
 
     def update_ci(self, ci_type: str, ci_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -758,11 +759,12 @@ class ServiceDeskPlusClient:
         endpoint = f"/cmdb/{ci_type}/{ci_id}"
 
         try:
+            logger.debug(f"UPDATE payload for {ci_type}/{ci_id}: {json.dumps(ci_data, indent=2)}")
             result = self._make_request("PUT", endpoint, data=ci_data)
             logger.info(f"Updated {ci_type}/{ci_id}: {data.get('name', 'unknown')}")
             return result
         except ServiceDeskPlusClientError as e:
-            logger.error(f"Failed to update {ci_type}/{ci_id}: {e}")
+            logger.error(f"Failed to update {ci_type}/{ci_id} '{data.get('name', 'unknown')}': {e}")
             return None
 
     def delete_ci(self, ci_type: str, ci_id: str) -> bool:
