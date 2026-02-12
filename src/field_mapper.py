@@ -18,10 +18,10 @@ ConnectWise uses "endpointType" to categorize devices:
 - "NetworkDevice" → Network Device
 
 SDP CI Types:
-- ci_windows_workstation → Laptops and Desktops
-- ci_virtual_machine → Virtual Servers
-- ci_windows_server → Physical Servers
-- ci_switch → Network Devices
+- asset_workstations → Laptops and Desktops
+- asset_virtual_machines → Virtual Servers
+- asset_servers → Physical Servers
+- asset_switches → Network Devices
 
 Field Mapping:
 --------------
@@ -58,18 +58,18 @@ class DeviceClassifier:
     Classify ConnectWise devices into ServiceDesk Plus asset categories.
 
     This class analyzes device properties to determine the appropriate
-    SDP CI type. The classification is based on:
+    SDP Asset product type. The classification is based on:
 
     1. endpointType from ConnectWise (Desktop, Server, NetworkDevice)
     2. Model name patterns (to distinguish laptops from desktops)
     3. VM indicators (to distinguish virtual from physical servers)
 
     Classification Results:
-    - "Laptop" → ci_windows_workstation (portable devices)
-    - "Desktop" → ci_windows_workstation (fixed workstations)
-    - "Virtual Server" → ci_virtual_machine (VMs)
-    - "Physical Server" → ci_windows_server (bare metal)
-    - "Network Device" → ci_switch (routers, switches, etc.)
+    - "Laptop" → asset_workstations (portable devices)
+    - "Desktop" → asset_workstations (fixed workstations)
+    - "Virtual Server" → asset_virtual_machines (VMs)
+    - "Physical Server" → asset_servers (bare metal)
+    - "Network Device" → asset_switches (routers, switches, etc.)
     """
 
     # =========================================================================
@@ -238,20 +238,20 @@ class DeviceClassifier:
 
 class FieldMapper:
     """
-    Map ConnectWise device fields to ServiceDesk Plus CI fields.
+    Map ConnectWise device fields to ServiceDesk Plus Asset fields.
 
     This class handles the translation of field names and values from
-    ConnectWise format to ServiceDesk Plus CMDB format.
+    ConnectWise format to ServiceDesk Plus Assets format.
 
     ConnectWise stores data in nested JSON structures:
     - device.system.serialNumber
     - device.os.product
     - device.networks[0].ipv4
 
-    ServiceDesk Plus uses flat field names with prefixes:
-    - ci_attributes_txt_serial_number
-    - ci_attributes_txt_os
-    - ci_attributes_txt_ip_address
+    ServiceDesk Plus Assets use flat field names:
+    - serial_number
+    - os
+    - ip_address
 
     The FIELD_MAP dictionary defines the mapping between these formats,
     along with optional transformation functions for data cleaning.
@@ -263,8 +263,8 @@ class FieldMapper:
         {
             '_category': 'Laptop',
             'name': 'LAPTOP-001',
-            'ci_attributes_txt_serial_number': 'ABC123',
-            'ci_attributes_txt_os': 'Windows 11 Pro',
+            'serial_number': 'ABC123',
+            'os': 'Windows 11 Pro',
             ...
         }
     """
@@ -273,35 +273,37 @@ class FieldMapper:
     # FIELD MAPPING CONFIGURATION
     # =========================================================================
 
-    # CW -> SDP field mapping
+    # CW -> SDP Asset field mapping (flat fields)
     # Format: 'sdp_field': ('cw_path', 'transformation_method_name')
     #
     # cw_path uses dot notation for nested fields (e.g., 'system.serialNumber')
     # transformation_method_name is the name of a method on this class (or None)
     FIELD_MAP = {
-        # CI Name - uses the CW friendly name (computer name)
+        # Asset Name - uses the CW friendly name (computer name)
         'name': ('friendlyName', None),
 
         # Serial Number - from system.serialNumber, cleaned to remove VM UUIDs
-        'ci_attributes_txt_serial_number': ('system.serialNumber', '_clean_serial'),
-
-        # Service Tag - same as serial number for most devices
-        'ci_attributes_txt_service_tag': ('system.serialNumber', '_clean_serial'),
-
-        # Operating System - from os.product (e.g., "Windows 11 Pro")
-        'ci_attributes_txt_os': ('os.product', None),
-
-        # Manufacturer - from bios.manufacturer, normalized (LENOVO → Lenovo)
-        'ci_attributes_txt_manufacturer': ('bios.manufacturer', '_clean_manufacturer'),
+        'serial_number': ('system.serialNumber', '_clean_serial'),
 
         # IP Address - extracted from networks array (first valid internal IP)
-        'ci_attributes_txt_ip_address': ('networks', '_extract_ip'),
+        'ip_address': ('networks', '_extract_ip'),
 
         # MAC Address - extracted from networks array (comma-separated if multiple)
-        'ci_attributes_txt_mac_address': ('networks', '_extract_mac'),
+        'mac_address': ('networks', '_extract_mac'),
+    }
 
-        # Processor - from processor.product (e.g., "Intel Core i7-1165G7")
-        'ci_attributes_txt_processor_name': ('processor.product', None),
+    # CW -> SDP nested field mapping
+    # The SDP Assets API requires certain fields to be wrapped in nested objects.
+    # Format: 'sdp_parent_key': {'sdp_child_key': ('cw_path', 'transform')}
+    NESTED_FIELD_MAP = {
+        # Operating System info — SDP expects: {"operating_system": {"os": "..."}}
+        'operating_system': {
+            'os': ('os.product', None),
+        },
+        # Computer System info — SDP expects: {"computer_system": {"system_manufacturer": "..."}}
+        'computer_system': {
+            'system_manufacturer': ('bios.manufacturer', '_clean_manufacturer'),
+        },
     }
 
     # =========================================================================
@@ -330,24 +332,28 @@ class FieldMapper:
         """
         Map all CW device fields to SDP field values.
 
-        Iterates through FIELD_MAP, extracts values from the CW device,
-        applies any transformations, and returns a dictionary ready for
-        SDP API calls.
+        Iterates through FIELD_MAP (flat fields) and NESTED_FIELD_MAP
+        (fields requiring nested JSON objects), extracts values from the
+        CW device, applies transformations, and returns a dictionary
+        ready for SDP API calls.
 
         Returns:
             Dictionary with SDP field names as keys. Includes special
             '_category' key with the device classification.
+            Nested fields are returned as sub-dictionaries, e.g.:
+            {'operating_system': {'os': 'Windows 11 Pro'}}
 
         Example:
             >>> mapper = FieldMapper(cw_device)
             >>> data = mapper.get_sdp_data()
             >>> print(data['name'])  # "LAPTOP-001"
+            >>> print(data['operating_system']['os'])  # "Windows 11 Pro"
             >>> print(data['_category'])  # "Laptop"
         """
         # Start with the category (used to determine CI type)
         result = {'_category': self.category}
 
-        # Process each field mapping
+        # Process flat field mappings
         for sdp_field, (cw_path, transform) in self.FIELD_MAP.items():
             # Extract value from nested CW structure
             value = self._get_nested(cw_path)
@@ -359,6 +365,19 @@ class FieldMapper:
             # Only include non-empty values
             if value:
                 result[sdp_field] = value
+
+        # Process nested field mappings (e.g., operating_system, computer_system)
+        for parent_key, children in self.NESTED_FIELD_MAP.items():
+            nested = {}
+            for child_key, (cw_path, transform) in children.items():
+                value = self._get_nested(cw_path)
+                if transform and hasattr(self, transform):
+                    value = getattr(self, transform)(value)
+                if value:
+                    nested[child_key] = value
+            # Only include the parent if at least one child has a value
+            if nested:
+                result[parent_key] = nested
 
         return result
 

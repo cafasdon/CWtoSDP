@@ -665,13 +665,13 @@ class CompareDatabase:
             logger.warning(f"Failed to store CW device {endpoint_id}: {e}")
             return False
 
-    def store_sdp_workstation_single(self, workstation: Dict[str, Any], ws_id: str) -> bool:
+    def store_sdp_asset_single(self, workstation: Dict[str, Any], ws_id: str) -> bool:
         """
-        Store a single SDP workstation and mark it as fetched.
+        Store a single SDP asset and mark it as fetched.
 
         Args:
-            workstation: Workstation data dictionary.
-            ws_id: The unique workstation ID.
+            workstation: Asset data dictionary.
+            ws_id: The unique asset ID.
 
         Returns:
             True if stored successfully, False otherwise.

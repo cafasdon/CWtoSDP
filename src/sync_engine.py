@@ -32,11 +32,11 @@ If no match found → CREATE action
 CI Type Mapping:
 ----------------
 CW Category → SDP CI Type:
-- Laptop → ci_windows_workstation
-- Desktop → ci_windows_workstation
-- Virtual Server → ci_virtual_machine
-- Physical Server → ci_windows_server
-- Network Device → ci_switch
+- Laptop → asset_workstations
+- Desktop → asset_workstations
+- Virtual Server → asset_virtual_machines
+- Physical Server → asset_servers
+- Network Device → asset_switches
 
 Usage Example:
 --------------
@@ -104,7 +104,7 @@ class SyncItem:
         cw_id: ConnectWise endpoint ID (unique identifier)
         cw_name: ConnectWise friendly name (computer name)
         cw_category: Classified category (Laptop, Server, etc.)
-        sdp_ci_type: Target SDP CI type (ci_windows_workstation, etc.)
+        sdp_ci_type: Target SDP Asset type (asset_workstations, etc.)
         action: The sync action to perform (CREATE, UPDATE, etc.)
         sdp_id: Matching SDP CI ID (if UPDATE action)
         sdp_name: Matching SDP CI name (if UPDATE action)
@@ -172,10 +172,10 @@ class SyncItem:
 
 class SyncEngine:
     """
-    Engine for syncing ConnectWise devices to ServiceDesk Plus CMDB.
+    Engine for syncing ConnectWise devices to ServiceDesk Plus Assets.
 
     This class reads device data from the local SQLite database (populated
-    by the GUI or scripts), matches CW devices to existing SDP records,
+    by the GUI or scripts), matches CW devices to existing SDP assets,
     and builds a sync plan.
 
     The engine does NOT execute sync operations directly - it only builds
@@ -184,7 +184,7 @@ class SyncEngine:
 
     Attributes:
         conn: SQLite database connection
-        CI_TYPE_MAP: Mapping from CW categories to SDP CI types
+        ASSET_TYPE_MAP: Mapping from CW categories to SDP Asset types
 
     Example:
         >>> engine = SyncEngine()
@@ -195,17 +195,17 @@ class SyncEngine:
     """
 
     # =========================================================================
-    # CI TYPE MAPPING
+    # ASSET TYPE MAPPING
     # =========================================================================
 
-    # Maps DeviceClassifier categories to SDP CI types
-    # This determines which CMDB table a device goes into
-    CI_TYPE_MAP = {
-        "Laptop": "ci_windows_workstation",       # Portable computers
-        "Desktop": "ci_windows_workstation",      # Fixed workstations
-        "Virtual Server": "ci_virtual_machine",   # VMs (VMware, Hyper-V, etc.)
-        "Physical Server": "ci_windows_server",   # Bare metal servers
-        "Network Device": "ci_switch",            # Routers, switches, etc.
+    # Maps DeviceClassifier categories to SDP Asset product-type endpoints
+    # This determines which Asset type a device goes into
+    ASSET_TYPE_MAP = {
+        "Laptop": "asset_workstations",          # Portable computers
+        "Desktop": "asset_workstations",         # Fixed workstations
+        "Virtual Server": "asset_virtual_machines",  # VMs (VMware, Hyper-V, etc.)
+        "Physical Server": "asset_servers",      # Bare metal servers
+        "Network Device": "asset_switches",      # Routers, switches, etc.
     }
 
     # =========================================================================
@@ -236,9 +236,9 @@ class SyncEngine:
     def build_sync_preview(self) -> List[SyncItem]:
         """
         Build a preview of all sync operations.
-        
+
         Optimized implementation:
-        1. Pre-loads all SDP workstations into memory lookup maps (O(1) access)
+        1. Pre-loads all SDP assets into memory lookup maps (O(1) access)
         2. Iterates CW devices and matches against maps
         3. Eliminates N+1 DB query problem
         """
@@ -250,22 +250,22 @@ class SyncEngine:
         # =====================================================================
         sdp_lookup_name = {}
         sdp_lookup_serial = {}
-        
+
         try:
-            # Use main DB table 'sdp_workstations'
-            cursor.execute("SELECT * FROM sdp_workstations")
+            # Use main DB table 'sdp_assets'
+            cursor.execute("SELECT * FROM sdp_assets")
             sdp_rows = cursor.fetchall()
-            
+
             for row in sdp_rows:
                 # Build Hostname Lookup
                 if row["name"]:
                     sdp_lookup_name[row["name"].upper()] = row
-                    
+
                 # Build Serial Lookup (skip empty or VM serials)
                 serial = row["serial_number"]
                 if serial and "VMWARE" not in serial.upper() and "VIRTUAL" not in serial.upper():
                     sdp_lookup_serial[serial.upper()] = row
-                    
+
         except sqlite3.OperationalError:
             # Table might not exist if SDP fetch hasn't run yet
             pass
@@ -273,10 +273,10 @@ class SyncEngine:
         # =====================================================================
         # PROCESS CONNECTWISE DEVICES
         # =====================================================================
-        
+
         # Get all CW devices from the main DB table 'cw_devices'
         cursor.execute("SELECT endpoint_id, raw_json FROM cw_devices")
-        
+
         for row in cursor.fetchall():
             # Extract device data
             cw_id = row["endpoint_id"]
@@ -289,25 +289,21 @@ class SyncEngine:
             # Extract category
             category = sdp_data.pop("_category")
 
-            # Determine target SDP CI type
-            sdp_ci_type = self.CI_TYPE_MAP.get(category, "ci_windows_workstation")
+            # Determine target SDP Asset type endpoint
+            sdp_asset_type = self.ASSET_TYPE_MAP.get(category, "asset_workstations")
 
             # Try to find matching SDP record using in-memory lookups
             match = self._find_sdp_match_optimized(device, sdp_lookup_name, sdp_lookup_serial)
 
             if match:
                 # Match found → UPDATE action
-                # IMPORTANT: Use "ci_workstation" for updates because that's the
-                # CMDB type the record was fetched from. CW classification (e.g.
-                # "ci_virtual_machine") is used for display/categorization only.
-                # Using the wrong ci_type causes 404 on PUT because the CI doesn't
-                # exist under that type in SDP's CMDB.
+                # Use the generic /assets/{id} endpoint for updates
                 sdp_id, sdp_name, match_reason, existing_fields = match
                 item = SyncItem(
                     cw_id=cw_id,
                     cw_name=device.get("friendlyName", ""),
                     cw_category=category,
-                    sdp_ci_type="ci_workstation",
+                    sdp_ci_type=sdp_asset_type,
                     action=SyncAction.UPDATE,
                     sdp_id=sdp_id,
                     sdp_name=sdp_name,
@@ -321,7 +317,7 @@ class SyncEngine:
                     cw_id=cw_id,
                     cw_name=device.get("friendlyName", ""),
                     cw_category=category,
-                    sdp_ci_type=sdp_ci_type,
+                    sdp_ci_type=sdp_asset_type,
                     action=SyncAction.CREATE,
                     fields_to_sync=sdp_data,
                     sdp_existing_fields={},
@@ -361,14 +357,14 @@ class SyncEngine:
         if cw_name in lookup_name:
             row = lookup_name[cw_name]
             existing_fields = self._extract_sdp_fields(row)
-            return (str(row["ci_id"]), row["name"], f"Hostname match: {row['name']}", existing_fields)
+            return (str(row["asset_id"]), row["name"], f"Hostname match: {row['name']}", existing_fields)
             
         # 2. Serial Match (if not VM)
         if cw_serial and "VMWARE" not in cw_serial and "VIRTUAL" not in cw_serial:
             if cw_serial in lookup_serial:
                 row = lookup_serial[cw_serial]
                 existing_fields = self._extract_sdp_fields(row)
-                return (str(row["ci_id"]), row["name"], f"Serial match: {cw_serial}", existing_fields)
+                return (str(row["asset_id"]), row["name"], f"Serial match: {cw_serial}", existing_fields)
                 
         return None
 
@@ -376,33 +372,38 @@ class SyncEngine:
         """
         Extract relevant fields from an SDP database row for comparison.
         Samples keys safely to avoid KeyErrors if columns are missing.
-        Also parses raw_json for mac_address which isn't a direct column.
+        Returns nested structures for operating_system and computer_system
+        to match the format produced by FieldMapper.get_sdp_data().
         """
         def get_val(key):
-            # Check if key exists in row (sqlite3.Row supports searching keys)
             if key in row.keys():
                 return row[key]
             return None
 
-        # Try to extract mac_address from raw_json (not a direct DB column)
-        mac_address = None
+        result = {
+            "name": get_val("name"),
+            "serial_number": get_val("serial_number"),
+            "ip_address": get_val("ip_address"),
+            "mac_address": get_val("mac_address"),
+        }
+
+        # Extract nested fields from raw_json for comparison
         raw = get_val("raw_json")
         if raw:
             try:
-                ws = json.loads(raw)
-                ci_attrs = ws.get("ci_attributes", {})
-                mac_address = ci_attrs.get("txt_mac_address") or None
-            except (json.JSONDecodeError, AttributeError):
+                data = json.loads(raw)
+                # operating_system
+                os_info = data.get("operating_system", {})
+                if isinstance(os_info, dict) and os_info.get("os"):
+                    result["operating_system"] = {"os": os_info["os"]}
+                # computer_system
+                cs_info = data.get("computer_system", {})
+                if isinstance(cs_info, dict) and cs_info.get("system_manufacturer"):
+                    result["computer_system"] = {"system_manufacturer": cs_info["system_manufacturer"]}
+            except (json.JSONDecodeError, TypeError):
                 pass
 
-        return {
-            "name": get_val("name"),
-            "ci_attributes_txt_serial_number": get_val("serial_number"),
-            "ci_attributes_txt_os": get_val("os"),
-            "ci_attributes_txt_manufacturer": get_val("manufacturer"),
-            "ci_attributes_txt_ip_address": get_val("ip_address"),
-            "ci_attributes_txt_mac_address": mac_address,
-        }
+        return result
 
     # =========================================================================
     # SUMMARY STATISTICS
@@ -415,7 +416,7 @@ class SyncEngine:
         Provides counts grouped by:
         - Action (create, update, skip, error)
         - Category (Laptop, Server, etc.)
-        - CI Type (ci_windows_workstation, etc.)
+        - Asset Type (asset_workstations, etc.)
 
         Args:
             items: List of SyncItem objects from build_sync_preview()
@@ -426,7 +427,7 @@ class SyncEngine:
                 "total": 204,
                 "by_action": {"create": 172, "update": 32},
                 "by_category": {"Laptop": 150, "Virtual Server": 54},
-                "by_ci_type": {"ci_windows_workstation": 150, ...}
+                "by_ci_type": {"asset_workstations": 150, ...}
             }
         """
         summary = {

@@ -65,14 +65,15 @@ class Database:
             )
         """)
 
-        # ServiceDesk Plus workstations table
+        # ServiceDesk Plus assets table
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS sdp_workstations (
+            CREATE TABLE IF NOT EXISTS sdp_assets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ci_id TEXT UNIQUE NOT NULL,
+                asset_id TEXT UNIQUE NOT NULL,
                 name TEXT,
                 serial_number TEXT,
                 ip_address TEXT,
+                mac_address TEXT,
                 os TEXT,
                 manufacturer TEXT,
                 model TEXT,
@@ -80,6 +81,13 @@ class Database:
                 fetched_at TEXT NOT NULL
             )
         """)
+
+        # Migrate from old sdp_workstations table if it exists
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='sdp_workstations'")
+        if cursor.fetchone():
+            logger.info("Migrating sdp_workstations → sdp_assets")
+            cursor.execute("DROP TABLE IF EXISTS sdp_workstations")
+            conn.commit()
 
         # Field metadata table (for mapping)
         cursor.execute("""
@@ -225,88 +233,109 @@ class Database:
         return cursor.fetchone()[0]
 
     # =========================================================================
-    # ServiceDesk Plus Workstation Operations
+    # ServiceDesk Plus Asset Operations
     # =========================================================================
 
-    def store_sdp_workstations(self, workstations: List[Dict[str, Any]]) -> int:
+    def store_sdp_assets(self, assets: List[Dict[str, Any]]) -> int:
         """
-        Store ServiceDesk Plus workstations in database.
-        
+        Store ServiceDesk Plus assets in database.
+
+        Assets have a flat structure with fields at the top level:
+        - name, serial_number, ip_address, mac_address, os, etc.
+
         Args:
-            workstations: List of workstation dictionaries from SDP API.
-            
+            assets: List of asset dictionaries from SDP Assets API.
+
         Returns:
-            Number of workstations stored.
+            Number of assets stored.
         """
         conn = self._get_connection()
         cursor = conn.cursor()
         fetched_at = datetime.now().isoformat()
-        
+
         counts = {"new": 0, "updated": 0, "total": 0}
 
-        for ws in workstations:
+        for asset in assets:
             try:
-                # Extract CI attributes
-                ci_attrs = ws.get("ci_attributes", {})
-                model_info = ci_attrs.get("ref_model", {})
-                
-                ci_id = str(ws.get("id", ""))
-                if not ci_id:
+                asset_id = str(asset.get("id", ""))
+                if not asset_id:
                     continue
 
+                # Extract product info (manufacturer/model are in product ref)
+                product = asset.get("product", {})
+                manufacturer = ""
+                model = ""
+                if isinstance(product, dict):
+                    manufacturer = product.get("manufacturer", "") or ""
+                    model = product.get("name", "") or ""
+
+                # Extract OS from nested operating_system object
+                # Assets API returns: {"operating_system": {"os": "windows 11 ..."}}
+                os_info = asset.get("operating_system", {})
+                os_value = ""
+                if isinstance(os_info, dict):
+                    os_value = os_info.get("os", "") or ""
+
+                # Fallback: manufacturer from computer_system if product lacks it
+                if not manufacturer:
+                    cs_info = asset.get("computer_system", {})
+                    if isinstance(cs_info, dict):
+                        manufacturer = cs_info.get("system_manufacturer", "") or ""
+
                 # Check if exists (to distinguish insert vs update)
-                cursor.execute("SELECT 1 FROM sdp_workstations WHERE ci_id = ?", (ci_id,))
+                cursor.execute("SELECT 1 FROM sdp_assets WHERE asset_id = ?", (asset_id,))
                 exists = cursor.fetchone() is not None
-                
+
                 if exists:
                     counts["updated"] += 1
                 else:
                     counts["new"] += 1
 
                 cursor.execute("""
-                    INSERT OR REPLACE INTO sdp_workstations
-                    (ci_id, name, serial_number, ip_address, os, manufacturer, model, raw_json, fetched_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT OR REPLACE INTO sdp_assets
+                    (asset_id, name, serial_number, ip_address, mac_address, os, manufacturer, model, raw_json, fetched_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    ci_id,
-                    ws.get("name", ""),
-                    ci_attrs.get("txt_serial_number", ""),
-                    ci_attrs.get("txt_ip_address", ""),
-                    ci_attrs.get("txt_os", ""),
-                    model_info.get("manufacturer", "") if isinstance(model_info, dict) else "",
-                    model_info.get("name", "") if isinstance(model_info, dict) else "",
-                    json.dumps(ws),
+                    asset_id,
+                    asset.get("name", "") or "",
+                    asset.get("serial_number", "") or "",
+                    asset.get("ip_address", "") or "",
+                    asset.get("mac_address", "") or "",
+                    os_value,
+                    manufacturer,
+                    model,
+                    json.dumps(asset),
                     fetched_at
                 ))
                 counts["total"] += 1
             except Exception as e:
-                logger.warning(f"Failed to store workstation: {e}")
+                logger.warning(f"Failed to store asset: {e}")
 
         conn.commit()
-        logger.info(f"Stored {counts['total']} SDP workstations (New: {counts['new']}, Updated: {counts['updated']})")
+        logger.info(f"Stored {counts['total']} SDP assets (New: {counts['new']}, Updated: {counts['updated']})")
         return counts['total']
 
-    def get_sdp_workstations(self) -> List[Dict[str, Any]]:
-        """Get all stored ServiceDesk Plus workstations."""
+    def get_sdp_assets(self) -> List[Dict[str, Any]]:
+        """Get all stored ServiceDesk Plus assets."""
         conn = self._get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM sdp_workstations ORDER BY name")
+        cursor.execute("SELECT * FROM sdp_assets ORDER BY name")
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
-    def get_sdp_workstation_raw(self, ci_id: str) -> Optional[Dict[str, Any]]:
-        """Get raw JSON data for a specific SDP workstation."""
+    def get_sdp_asset_raw(self, asset_id: str) -> Optional[Dict[str, Any]]:
+        """Get raw JSON data for a specific SDP asset."""
         conn = self._get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT raw_json FROM sdp_workstations WHERE ci_id = ?", (ci_id,))
+        cursor.execute("SELECT raw_json FROM sdp_assets WHERE asset_id = ?", (asset_id,))
         row = cursor.fetchone()
         return json.loads(row["raw_json"]) if row else None
 
-    def get_sdp_workstation_ids(self) -> set:
-        """Get set of all stored SDP workstation CI IDs (as strings)."""
+    def get_sdp_asset_ids(self) -> set:
+        """Get set of all stored SDP asset IDs (as strings)."""
         conn = self._get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT ci_id FROM sdp_workstations")
+        cursor.execute("SELECT asset_id FROM sdp_assets")
         return {str(row[0]) for row in cursor.fetchall()}
 
     # =========================================================================
@@ -416,7 +445,7 @@ class Database:
         cursor = conn.cursor()
 
         stats = {}
-        for table in ["cw_devices", "sdp_workstations", "field_metadata", "field_mappings"]:
+        for table in ["cw_devices", "sdp_assets", "field_metadata", "field_mappings"]:
             cursor.execute(f"SELECT COUNT(*) FROM {table}")
             stats[table] = cursor.fetchone()[0]
 

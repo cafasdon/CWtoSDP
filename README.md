@@ -4,7 +4,7 @@
 [![License](https://img.shields.io/badge/license-Dual-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)]()
 
-Integration tool for syncing device/asset data between **ConnectWise RMM** and **ManageEngine ServiceDesk Plus Cloud** CMDB. Includes a full GUI for interactive use and CLI scripts for automated scheduled syncs.
+Integration tool for syncing device/asset data between **ConnectWise RMM** and **ManageEngine ServiceDesk Plus Cloud** Assets. Includes a full GUI for interactive use and CLI scripts for automated scheduled syncs.
 
 ## 🖥️ Easy Installation (Windows)
 
@@ -68,7 +68,7 @@ python -m src.main --sync
 | **Sync Manager GUI** | Visual interface for previewing and executing syncs |
 | **Dry Run Mode** | Two-level safety: preview changes before committing (enabled by default) |
 | **Selective Sync** | Choose which items to sync with checkboxes |
-| **Create & Update** | Creates new CIs in SDP and updates existing ones with changed fields |
+| **Create & Update** | Creates new Assets in SDP and updates existing ones with changed fields |
 | **Device Classification** | Auto-categorizes: Laptop, Desktop, Server, VM, Network Device |
 | **Field Mapping** | Maps CW fields to SDP CMDB attributes with visual preview |
 | **Diff View** | Side-by-side comparison of CW vs SDP data |
@@ -201,15 +201,15 @@ Devices are matched to existing SDP records in this order:
 | 1        | Hostname      | CW `friendlyName` = SDP `name` (case-insensitive) |
 | 2        | Serial Number | Only for non-VM devices (excludes VMware UUIDs)   |
 
-- **Match found** → UPDATE action (update existing CI fields)
-- **No match** → CREATE action (create new CI)
+- **Match found** → UPDATE action (update existing Asset fields)
+- **No match** → CREATE action (create new Asset)
 
 ### Preview Legend - Row Colors
 
 | Color    | Action | Meaning                                 |
 | -------- | ------ | --------------------------------------- |
-| 🟢 Green | CREATE | New device, will create new CI in SDP   |
-| 🔵 Blue  | UPDATE | Matched device, will update existing CI |
+| 🟢 Green | CREATE | New device, will create new Asset in SDP   |
+| 🔵 Blue  | UPDATE | Matched device, will update existing Asset |
 
 ### Preview Legend - Field Indicators
 
@@ -257,7 +257,7 @@ The confirmation dialog always shows **"Selection: SELECTED (N items)"** or **"S
 
 **Dry run is the default.** When enabled, the SDP client has **two levels of safety**:
 
-1. **Method level** — Each write method (`create_ci`, `update_ci`, `delete_ci`) returns a simulated success immediately without making any HTTP request
+1. **Method level** — Each write method (`create_asset`, `update_asset`, `delete_asset`) returns a simulated success immediately without making any HTTP request
 2. **Request level** — Even if something bypasses level 1, all POST/PUT/DELETE HTTP requests are blocked
 
 This means dry run is **instant** (no network calls) and **completely safe** — nothing is sent to SDP.
@@ -273,23 +273,25 @@ After a dry run, the Results tab shows exactly what *would* happen with color-co
 
 ### ConnectWise → ServiceDesk Plus
 
-| CW Field                  | SDP CI Attribute                  |
-| ------------------------- | --------------------------------- |
-| `friendlyName`            | `name`                            |
-| `system.serialNumber`     | `ci_attributes.txt_serial_number` |
-| `operatingSystem.name`    | `ci_attributes.txt_os`            |
-| `system.manufacturer`     | `ci_attributes.txt_manufacturer`  |
-| `addresses[0].ipAddress`  | `ci_attributes.txt_ip_address`    |
-| `addresses[0].macAddress` | `ci_attributes.txt_mac_address`   |
+| CW Field                  | SDP Asset Field                                      |
+| ------------------------- | ---------------------------------------------------- |
+| `friendlyName`            | `name`                                               |
+| `system.serialNumber`     | `serial_number`                                      |
+| `os.product`              | `operating_system.os` (nested)                       |
+| `bios.manufacturer`       | `computer_system.system_manufacturer` (nested)       |
+| `networks[].ipv4`         | `ip_address`                                         |
+| `networks[].macAddress`   | `mac_address`                                        |
 
-### SDP Field Types & Limits
+### SDP Asset Types
 
-| Prefix  | Type    | Character Limit | Example               |
-| ------- | ------- | --------------- | --------------------- |
-| `txt_`  | Text    | 250 chars       | `txt_serial_number`   |
-| `num_`  | Numeric | N/A             | `num_processor_count` |
-| `date_` | Date    | N/A             | `date_purchase_date`  |
-| `ref_`  | Lookup  | Must exist      | `ref_owned_by`        |
+Assets are sent to type-specific API endpoints based on device classification:
+
+| Classification | SDP Endpoint |
+| -------------- | ------------ |
+| Laptop/Desktop | `asset_workstations` |
+| Virtual Server | `asset_virtual_machines` |
+| Physical Server | `asset_servers` |
+| Network Device | `asset_switches` |
 
 ---
 
@@ -500,21 +502,21 @@ CWtoSDP/
 
 Devices are automatically classified using model name, serial number, and CW device type:
 
-| CW Type | Classification | SDP CI Type | Detection Method |
-| ------- | -------------- | ----------- | ---------------- |
-| Desktop (ThinkPad/ProBook/etc.) | Laptop | ci_windows_workstation | Model name keywords |
-| Desktop (other) | Desktop | ci_windows_workstation | Default for desktops |
-| Server + VMware serial | Virtual Server | ci_virtual_machine | VMware UUID pattern |
-| Server + real serial | Physical Server | ci_windows_server | Hardware serial number |
-| NetworkDevice | Network Device | ci_switch | CW device type |
-| Mobile | Mobile Device | ci_windows_workstation | CW device type |
+| CW Type | Classification | SDP Asset Type | Detection Method |
+| ------- | -------------- | -------------- | ---------------- |
+| Desktop (ThinkPad/ProBook/etc.) | Laptop | asset_workstations | Model name keywords |
+| Desktop (other) | Desktop | asset_workstations | Default for desktops |
+| Server + VMware serial | Virtual Server | asset_virtual_machines | VMware UUID pattern |
+| Server + real serial | Physical Server | asset_servers | Hardware serial number |
+| NetworkDevice | Network Device | asset_switches | CW device type |
+| Mobile | Mobile Device | asset_workstations | CW device type |
 
 ## API Access
 
 | System | Endpoint | Access | Used For |
 | ------ | -------- | ------ | -------- |
 | ConnectWise | Devices, Sites, Companies | Read | Fetching endpoint data |
-| ServiceDesk Plus | CMDB (CI Types) | Full CRUD | Creating/updating/deleting CIs |
+| ServiceDesk Plus | Assets API | Full CRUD | Creating/updating/deleting Assets |
 | ServiceDesk Plus | Requests | Read-only | Future ticket integration |
 
 ## Data Centers
@@ -560,6 +562,7 @@ You can also navigate there directly: press **Win + R**, paste `%USERPROFILE%\CW
 
 | Version | Date | Changes |
 | ------- | ---- | ------- |
+| 1.3.0 | 2026-02-12 | **CMDB → Assets API migration**: all sync operations now use the Assets API with nested field mapping (`operating_system`, `computer_system`). DB schema updated (`sdp_assets`). |
 | 1.2.0 | 2026-02-12 | Fixed SDP create/update failures (HTTP 2xx acceptance), fixed unclosable progress window, fixed first-run crash when credentials are missing, improved error logging with device names |
 | 1.1.0 | 2026-02-06 | Adaptive rate limiting with dynamic recovery, two-level dry run safety, CREATE + UPDATE sync, improved error handling |
 | 1.0.0 | 2026-01-20 | Initial release — GUI sync manager, device classification, field mapping, dry run |

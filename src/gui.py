@@ -194,11 +194,11 @@ class FieldMapperApp:
     def _refresh_data(self):
         """Refresh all data from database."""
         self._load_cw_devices()
-        self._load_sdp_workstations()
+        self._load_sdp_assets()
         self._load_field_metadata()
         self._load_mappings()
         stats = self.db.get_stats()
-        self.status_var.set(f"Loaded: {stats['cw_devices']} CW devices, {stats['sdp_workstations']} SDP workstations, {stats['field_mappings']} mappings")
+        self.status_var.set(f"Loaded: {stats['cw_devices']} CW devices, {stats['sdp_assets']} SDP assets, {stats['field_mappings']} mappings")
 
     def _load_cw_devices(self):
         """Load ConnectWise devices into browser tree."""
@@ -212,16 +212,16 @@ class FieldMapperApp:
                 dev["os_type"], dev["last_seen"][:10] if dev["last_seen"] else ""
             ))
 
-    def _load_sdp_workstations(self):
-        """Load SDP workstations into browser tree."""
+    def _load_sdp_assets(self):
+        """Load SDP assets into browser tree."""
         for item in self.sdp_tree.get_children():
             self.sdp_tree.delete(item)
 
-        workstations = self.db.get_sdp_workstations()
-        for ws in workstations:
-            self.sdp_tree.insert("", tk.END, iid=ws["ci_id"], values=(
-                ws["name"], ws["serial_number"], ws["ip_address"],
-                ws["os"], ws["manufacturer"]
+        assets = self.db.get_sdp_assets()
+        for asset in assets:
+            self.sdp_tree.insert("", tk.END, iid=asset["asset_id"], values=(
+                asset["name"], asset["serial_number"], asset["ip_address"],
+                asset["os"], asset["manufacturer"]
             ))
 
     def _load_field_metadata(self):
@@ -273,9 +273,9 @@ class FieldMapperApp:
             selection = self.sdp_tree.selection()
             if not selection:
                 return
-            ci_id = selection[0]
-            raw = self.db.get_sdp_workstation_raw(ci_id)
-            title = f"ServiceDesk Plus Workstation: {ci_id}"
+            asset_id = selection[0]
+            raw = self.db.get_sdp_asset_raw(asset_id)
+            title = f"ServiceDesk Plus Asset: {asset_id}"
 
         if raw:
             self._show_json_window(title, raw)

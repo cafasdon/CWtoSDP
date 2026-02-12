@@ -270,12 +270,12 @@ def fetch_sdp_data(config: AppConfig) -> dict:
         dry_run=config.dry_run  # Respects dry_run for safety
     )
 
-    # Fetch workstations from CMDB
+    # Fetch assets from SDP Assets API
     data = {
-        "workstations": sdp_client.get_all_cmdb_workstations(),
+        "assets": sdp_client.get_all_assets(),
     }
 
-    logger.info(f"ServiceDesk Plus fetch complete: {len(data['workstations'])} workstations")
+    logger.info(f"ServiceDesk Plus fetch complete: {len(data['assets'])} assets")
 
     return data
 
@@ -418,13 +418,13 @@ def main():
     if args.fetch_sdp:
         # Fetch data from ServiceDesk Plus API
         sdp_data = fetch_sdp_data(config)
-        # Store workstations in SQLite database
-        db.store_sdp_workstations(sdp_data["workstations"])
+        # Store assets in SQLite database
+        db.store_sdp_assets(sdp_data["assets"])
         # Analyze field structure for mapping
-        db.analyze_fields("sdp", sdp_data["workstations"])
+        db.analyze_fields("sdp", sdp_data["assets"])
         # Export to CSV if requested
         if args.export:
-            export_to_csv(sdp_data["workstations"], "sdp_workstations.csv", config.output_dir)
+            export_to_csv(sdp_data["assets"], "sdp_assets.csv", config.output_dir)
 
     # =========================================================================
     # COMPARISON MODE - Detailed data fetch for field mapping
@@ -490,19 +490,19 @@ def main():
         # ---------------------------------------------------------------------
         # SDP data comes in bulk, but we store individually for tracking
 
-        logger.info("Fetching ServiceDesk Plus workstation data...")
+        logger.info("Fetching ServiceDesk Plus asset data...")
         sdp_client = ServiceDeskPlusClient(config.servicedesk)
-        workstations = sdp_client.get_all_cmdb_workstations()
+        workstations = sdp_client.get_all_assets()
 
         # Filter and store individually for resumable tracking
         sdp_stored = 0
         for ws in workstations:
             ws_id = str(ws.get("id", ""))
             if ws_id and ws_id not in sdp_fetched_ids:
-                if compare_db.store_sdp_workstation_single(ws, ws_id):
+                if compare_db.store_sdp_asset_single(ws, ws_id):
                     sdp_stored += 1
 
-        logger.info(f"Stored {sdp_stored} new SDP workstations")
+        logger.info(f"Stored {sdp_stored} new SDP assets")
 
         # ---------------------------------------------------------------------
         # SUMMARY AND COLUMN COMPARISON

@@ -41,13 +41,13 @@ Usage Example:
     # Create client (loads config from credentials.env)
     client = SDPClient(dry_run=True)  # Safe mode
 
-    # Get all workstations
-    workstations = client.get_all_cmdb_workstations()
-    print(f"Found {len(workstations)} workstations")
+    # Get all assets
+    assets = client.get_all_assets()
+    print(f"Found {len(assets)} assets")
 
-    # Create a new CI (only works if dry_run=False)
+    # Create a new asset (only works if dry_run=False)
     client = SDPClient(dry_run=False)
-    client.create_ci("ci_windows_workstation", {"name": "NEW-PC-001"})
+    client.create_asset("asset_workstations", {"name": "NEW-PC-001"})
 """
 
 import json
@@ -83,7 +83,7 @@ class ServiceDeskPlusClientError(Exception):
 
     Example:
         >>> try:
-        ...     workstations = client.get_all_cmdb_workstations()
+        ...     assets = client.get_all_assets()
         ... except ServiceDeskPlusClientError as e:
         ...     print(f"API Error: {e}")
     """
@@ -118,7 +118,7 @@ class ServiceDeskPlusClient:
         >>> from src.config import load_config
         >>> config = load_config()
         >>> client = ServiceDeskPlusClient(config.servicedesk, dry_run=True)
-        >>> workstations = client.get_all_cmdb_workstations()
+        >>> assets = client.get_all_assets()
     """
 
     def __init__(
@@ -452,12 +452,9 @@ class ServiceDeskPlusClient:
     # READ OPERATIONS (Safe for production - no data modification)
     # =========================================================================
 
-    def get_assets(self, row_count: int = 100, start_index: int = 1) -> Dict[str, Any]:
+    def get_assets_page(self, row_count: int = 100, start_index: int = 1) -> Dict[str, Any]:
         """
-        Get assets from ServiceDesk Plus.
-
-        Assets are the general asset management items in SDP, separate from
-        CMDB Configuration Items. This is typically used for IT asset tracking.
+        Get one page of assets from ServiceDesk Plus.
 
         Args:
             row_count: Number of results per page (max 100)
@@ -469,161 +466,93 @@ class ServiceDeskPlusClient:
             - "list_info": Pagination info (has_more_rows, total_count, etc.)
         """
         logger.info(f"Fetching assets (start: {start_index}, count: {row_count})...")
-        endpoint = f"/assets?list_info.row_count={row_count}&list_info.start_index={start_index}"
-        data = self._make_request("GET", endpoint)
+        # Assets API expects pagination via input_data query param containing JSON
+        list_info = {
+            "list_info": {
+                "row_count": row_count,
+                "start_index": start_index
+            }
+        }
+        endpoint = "/assets"
+        data = self._make_request(
+            "GET", endpoint,
+            params={"input_data": json.dumps(list_info)}
+        )
         assets = data.get("assets", [])
         logger.info(f"Retrieved {len(assets)} assets")
         return data
 
-    def get_cmdb_workstations(
-        self, row_count: int = 100, start_index: int = 1
-    ) -> Dict[str, Any]:
+    def get_asset_by_id(self, asset_id: str) -> Dict[str, Any]:
         """
-        Get CMDB workstations from ServiceDesk Plus (single page).
-
-        CMDB workstations are Configuration Items of type "ci_workstation".
-        This is the main CI type we sync ConnectWise devices to.
+        Get a single asset by its ID.
 
         Args:
-            row_count: Number of results per page (max 100)
-            start_index: Starting index for pagination (1-based)
+            asset_id: The SDP asset ID
 
         Returns:
-            API response dictionary containing:
-            - "ci_workstation": List of workstation CI dictionaries
-            - "list_info": Pagination info (has_more_rows, total_count, etc.)
-
-        Note:
-            For fetching ALL workstations, use get_all_cmdb_workstations() instead.
+            Asset data dictionary
         """
-        logger.info(f"Fetching CMDB workstations (start: {start_index}, count: {row_count})...")
+        logger.info(f"Fetching asset by ID: {asset_id}")
+        return self._make_request("GET", f"/assets/{asset_id}")
 
-        # CMDB API uses input_data parameter for list_info (different from assets API)
-        list_info = {"list_info": {"row_count": row_count, "start_index": start_index}}
-        endpoint = f"/cmdb/ci_workstation?input_data={json.dumps(list_info)}"
-
-        data = self._make_request("GET", endpoint)
-        workstations = data.get("ci_workstation", [])
-        logger.info(f"Retrieved {len(workstations)} workstations")
-        return data
-
-    def get_cmdb_workstation_by_id(self, workstation_id: str) -> Dict[str, Any]:
-        """
-        Get a specific CMDB workstation by its ID.
-
-        Args:
-            workstation_id: The unique CI ID (from list response)
-
-        Returns:
-            Complete workstation CI details dictionary
-        """
-        logger.debug(f"Fetching workstation: {workstation_id}")
-        return self._make_request("GET", f"/cmdb/ci_workstation/{workstation_id}")
-
-    def get_requests(self, row_count: int = 100, start_index: int = 1) -> Dict[str, Any]:
-        """
-        Get service requests from ServiceDesk Plus.
-
-        Service requests are help desk tickets. This is READ-ONLY and
-        used for reference/reporting purposes.
-
-        Args:
-            row_count: Number of results per page (max 100)
-            start_index: Starting index for pagination (1-based)
-
-        Returns:
-            API response with requests and list_info
-        """
-        logger.info(f"Fetching requests (start: {start_index}, count: {row_count})...")
-        endpoint = f"/requests?list_info.row_count={row_count}&list_info.start_index={start_index}"
-        data = self._make_request("GET", endpoint)
-        requests_list = data.get("requests", [])
-        logger.info(f"Retrieved {len(requests_list)} requests")
-        return data
-
-    def get_all_cmdb_workstations(
+    def get_all_assets(
         self,
-        max_items: Optional[int] = None,
-        progress_callback: Optional[callable] = None
+        max_items: int = None,
+        progress_callback=None
     ) -> List[Dict[str, Any]]:
         """
-        Get ALL CMDB workstations with automatic pagination.
-
-        This method handles pagination automatically, fetching all pages
-        until no more results are available. Supports cancellation and
-        progress callbacks for UI integration.
+        Fetch ALL assets with automatic pagination.
 
         Args:
-            max_items: Optional limit on total items to fetch.
-                      If None, fetches all available workstations.
-            progress_callback: Optional callback function called after each page.
-                              Signature: callback(fetched_count, total_count, workstations_page)
-                              If total_count is unknown, it will be 0.
+            max_items: Optional maximum number of assets to fetch.
+            progress_callback: Optional function called after each page.
+                              Signature: callback(fetched_count, total_count, assets_page)
 
         Returns:
-            List of all workstation CI dictionaries
-
-        Example:
-            >>> workstations = client.get_all_cmdb_workstations()
-            >>> print(f"Total: {len(workstations)}")
-            >>>
-            >>> # With progress callback
-            >>> def on_progress(fetched, total, page):
-            ...     print(f"Fetched {fetched} of {total}")
-            >>> workstations = client.get_all_cmdb_workstations(progress_callback=on_progress)
+            List of all asset dictionaries
         """
-        all_workstations = []
+        all_assets = []
         start_index = 1
-        page_size = 100  # Max allowed by API
-        total_count = 0  # Will be updated from first response
+        page_size = 100
+        total_count = 0
 
-        # Reset cancellation flag at start
         self.reset_cancel()
 
-        # Pagination loop
         while True:
-            # Check for cancellation
             if self._cancelled:
-                logger.info(f"SDP fetch cancelled after {len(all_workstations)} workstations")
+                logger.info(f"SDP fetch cancelled after {len(all_assets)} assets")
                 break
 
-            # Fetch one page
-            data = self.get_cmdb_workstations(row_count=page_size, start_index=start_index)
-            workstations = data.get("ci_workstation", [])
-            all_workstations.extend(workstations)
+            data = self.get_assets_page(row_count=page_size, start_index=start_index)
+            assets = data.get("assets", [])
+            all_assets.extend(assets)
 
-            # Check pagination info
             list_info = data.get("list_info", {})
             has_more = list_info.get("has_more_rows", False)
 
-            # Get total count from first response (if available)
             if total_count == 0:
                 total_count = list_info.get("total_count", 0)
 
-            # Call progress callback if provided
             if progress_callback:
                 try:
-                    progress_callback(len(all_workstations), total_count, workstations)
+                    progress_callback(len(all_assets), total_count, assets)
                 except Exception as e:
                     logger.warning(f"Progress callback error: {e}")
 
-            # Check if we've hit the max_items limit
-            if max_items and len(all_workstations) >= max_items:
-                all_workstations = all_workstations[:max_items]
+            if max_items and len(all_assets) >= max_items:
+                all_assets = all_assets[:max_items]
                 break
 
-            # Check if there are more pages
-            if not has_more or not workstations:
+            if not has_more or not assets:
                 break
 
-            # Move to next page
             start_index += page_size
 
-        logger.info(f"Total workstations retrieved: {len(all_workstations)}")
-        return all_workstations
+        logger.info(f"Total assets retrieved: {len(all_assets)}")
+        return all_assets
 
     # =========================================================================
-    # WRITE OPERATIONS (Blocked in dry_run mode for safety)
+    # ASSET WRITE OPERATIONS (CREATE / UPDATE / DELETE)
     # =========================================================================
 
     @staticmethod
@@ -631,22 +560,14 @@ class ServiceDeskPlusClient:
         """
         Parse an SDP error response to find fields rejected as EXTRA_KEY_FOUND_IN_JSON.
 
-        When a CI type doesn't support a particular attribute (e.g. ci_virtual_machine
-        doesn't have txt_os), SDP returns a 400 with a JSON body listing the offending
-        field names. This method extracts those field names so they can be stripped
-        from the payload and the request retried.
-
         Args:
             error_message: The full error string from ServiceDeskPlusClientError
 
         Returns:
-            List of rejected field names (e.g. ['ci_attributes_txt_os']),
-            or empty list if the error is not an EXTRA_KEY issue.
+            List of rejected field names, or empty list if not an EXTRA_KEY issue.
         """
         extra_fields = []
         try:
-            # Error format: "Request failed: 400 - {json}"
-            # Find the JSON portion after the status code
             json_start = error_message.find('{')
             if json_start == -1:
                 return []
@@ -661,241 +582,170 @@ class ServiceDeskPlusClient:
                         extra_fields.append(field)
 
         except (json.JSONDecodeError, KeyError, TypeError):
-            pass  # Not a parseable EXTRA_KEY error — let caller handle it
+            pass
 
         return extra_fields
 
-    def create_ci(self, ci_type: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def create_asset(self, asset_type_endpoint: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
-        Create a new CI (Configuration Item) in CMDB.
-
-        This is the main method for syncing devices from ConnectWise to SDP.
-        Creates a new CI of the specified type with the provided field values.
+        Create a new Asset in ServiceDesk Plus.
 
         SAFETY: This operation is BLOCKED if dry_run=True (default).
 
         Args:
-            ci_type: The CI type to create. Valid types include:
-                    - "ci_windows_workstation" - Windows laptops/desktops
-                    - "ci_virtual_machine" - Virtual servers
-                    - "ci_windows_server" - Physical Windows servers
-                    - "ci_switch" - Network devices
-            data: Dictionary of field values to set. Common fields:
-                    - "name": CI name (required)
-                    - "ci_attributes_serial_number": Serial number
-                    - "ci_attributes_ip_address": IP address
-                    - etc.
+            asset_type_endpoint: The product type API endpoint, e.g.:
+                    - "asset_virtual_machines"
+                    - "asset_workstations"
+                    - "asset_servers"
+            data: Dictionary of flat field values. Common fields:
+                    - "name": Asset name (required)
+                    - "serial_number": Serial number
+                    - "ip_address": IP address
+                    - "mac_address": MAC address
+                    - "os": Operating system
+                    - "manufacturer": Manufacturer
 
         Returns:
-            Created CI data dictionary if successful
+            Created asset data dictionary if successful
             {"dry_run": True, ...} if in dry_run mode
             None if creation failed
-
-        Example:
-            >>> client = ServiceDeskPlusClient(config, dry_run=False)
-            >>> result = client.create_ci("ci_windows_workstation", {
-            ...     "name": "LAPTOP-001",
-            ...     "ci_attributes_serial_number": "ABC123"
-            ... })
         """
-        # SAFETY: Block in dry_run mode
         if self.dry_run:
-            logger.info(f"[DRY RUN] Would create {ci_type}: {data.get('name', 'unknown')}")
+            logger.info(f"[DRY RUN] Would create {asset_type_endpoint}: {data.get('name', 'unknown')}")
             return {"dry_run": True, "would_create": data}
 
-        # Build the request payload
-        # SDP expects nested structure: {"ci_type": {"name": "...", "ci_attributes": {...}}}
-        ci_data = {ci_type: {}}
-
-        # Map fields to proper structure
+        # Build flat payload — Assets use flat structure, not nested ci_attributes
+        asset_data = {}
         for key, value in data.items():
-            # Skip empty values
             if value is None or value == "":
                 continue
+            asset_data[key] = value
 
-            if key == "name":
-                # Name goes at top level
-                ci_data[ci_type]["name"] = value
-            elif key.startswith("ci_attributes_"):
-                # Attributes go under ci_attributes object
-                if "ci_attributes" not in ci_data[ci_type]:
-                    ci_data[ci_type]["ci_attributes"] = {}
-                # Strip the "ci_attributes_" prefix — SDP expects just "txt_os"
-                # not "ci_attributes_txt_os" inside the ci_attributes dict
-                attr_name = key[len("ci_attributes_"):]
-                ci_data[ci_type]["ci_attributes"][attr_name] = value
+        # Wrap in the singular form key (e.g. asset_virtual_machine for asset_virtual_machines)
+        singular_key = asset_type_endpoint.rstrip('s')
+        payload = {singular_key: asset_data}
 
-        # Build endpoint - pass raw dict, _make_request handles JSON serialization
-        endpoint = f"/cmdb/{ci_type}"
-        device_name = data.get('name', 'unknown')
-
-        # Retry loop: auto-strip fields rejected by SDP as EXTRA_KEY_FOUND_IN_JSON
-        # Different CI types accept different attributes — this handles mismatches
-        # dynamically without maintaining a manual exclusion list.
-        max_field_retries = 5  # Safety cap (one retry per rejected field)
-        for field_attempt in range(max_field_retries + 1):
-            try:
-                logger.debug(f"CREATE payload for {ci_type}: {json.dumps(ci_data, indent=2)}")
-                result = self._make_request("POST", endpoint, data=ci_data)
-                logger.info(f"Created {ci_type}: {device_name}")
-                return result
-            except ServiceDeskPlusClientError as e:
-                error_str = str(e)
-                extra_fields = self._parse_extra_key_fields(error_str)
-
-                if extra_fields and field_attempt < max_field_retries:
-                    # Remove rejected fields and retry
-                    attrs = ci_data.get(ci_type, {}).get("ci_attributes", {})
-                    for field in extra_fields:
-                        if field in attrs:
-                            del attrs[field]
-                            logger.warning(
-                                f"Field '{field}' not supported on {ci_type}, "
-                                f"removed and retrying ({device_name})"
-                            )
-                    continue  # Retry without the rejected field(s)
-
-                # Non-retryable error or max retries exhausted
-                logger.error(f"Failed to create {ci_type} '{device_name}': {e}")
-                return None
-
-        logger.error(f"Failed to create {ci_type} '{device_name}': too many rejected fields")
-        return None
-
-    def update_ci(self, ci_type: str, ci_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """
-        Update an existing CI (Configuration Item) in CMDB.
-
-        This method updates an existing CI with new field values from ConnectWise.
-        Only non-empty fields are updated; existing values are preserved for
-        fields not included in the update.
-
-        SAFETY: This operation is BLOCKED if dry_run=True (default).
-
-        Args:
-            ci_type: The CI type to update. Valid types include:
-                    - "ci_windows_workstation" - Windows laptops/desktops
-                    - "ci_virtual_machine" - Virtual servers
-                    - "ci_windows_server" - Physical Windows servers
-                    - "ci_switch" - Network devices
-            ci_id: The unique CI ID in SDP to update
-            data: Dictionary of field values to update. Common fields:
-                    - "name": CI name
-                    - "ci_attributes_serial_number": Serial number
-                    - "ci_attributes_ip_address": IP address
-                    - etc.
-
-        Returns:
-            Updated CI data dictionary if successful
-            {"dry_run": True, ...} if in dry_run mode
-            None if update failed
-
-        Example:
-            >>> client = ServiceDeskPlusClient(config, dry_run=False)
-            >>> result = client.update_ci("ci_windows_workstation", "123456", {
-            ...     "ci_attributes_ip_address": "192.168.1.100"
-            ... })
-        """
-        # SAFETY: Block in dry_run mode
-        if self.dry_run:
-            logger.info(f"[DRY RUN] Would update {ci_type}/{ci_id}: {data.get('name', 'unknown')}")
-            return {"dry_run": True, "would_update": data, "ci_id": ci_id}
-
-        # Build the request payload (same structure as create)
-        # SDP expects nested structure: {"ci_type": {"name": "...", "ci_attributes": {...}}}
-        ci_data = {ci_type: {}}
-
-        # Map fields to proper structure
-        for key, value in data.items():
-            # Skip empty values
-            if value is None or value == "":
-                continue
-
-            if key == "name":
-                # Name goes at top level
-                ci_data[ci_type]["name"] = value
-            elif key.startswith("ci_attributes_"):
-                # Attributes go under ci_attributes object
-                if "ci_attributes" not in ci_data[ci_type]:
-                    ci_data[ci_type]["ci_attributes"] = {}
-                # Strip the "ci_attributes_" prefix — SDP expects just "txt_os"
-                # not "ci_attributes_txt_os" inside the ci_attributes dict
-                attr_name = key[len("ci_attributes_"):]
-                ci_data[ci_type]["ci_attributes"][attr_name] = value
-
-        # Build endpoint - pass raw dict, _make_request handles JSON serialization
-        endpoint = f"/cmdb/{ci_type}/{ci_id}"
+        endpoint = f"/{asset_type_endpoint}"
         device_name = data.get('name', 'unknown')
 
         # Retry loop: auto-strip fields rejected by SDP as EXTRA_KEY_FOUND_IN_JSON
         max_field_retries = 5
         for field_attempt in range(max_field_retries + 1):
             try:
-                logger.debug(f"UPDATE payload for {ci_type}/{ci_id}: {json.dumps(ci_data, indent=2)}")
-                result = self._make_request("PUT", endpoint, data=ci_data)
-                logger.info(f"Updated {ci_type}/{ci_id}: {device_name}")
+                logger.debug(f"CREATE payload for {asset_type_endpoint}: {json.dumps(payload, indent=2)}")
+                result = self._make_request("POST", endpoint, data=payload)
+                logger.info(f"Created {asset_type_endpoint}: {device_name}")
+                return result
+            except ServiceDeskPlusClientError as e:
+                error_str = str(e)
+                extra_fields = self._parse_extra_key_fields(error_str)
+
+                if extra_fields and field_attempt < max_field_retries:
+                    for field in extra_fields:
+                        if field in asset_data:
+                            del asset_data[field]
+                            logger.warning(
+                                f"Field '{field}' not supported on {asset_type_endpoint}, "
+                                f"removed and retrying ({device_name})"
+                            )
+                    continue
+
+                logger.error(f"Failed to create {asset_type_endpoint} '{device_name}': {e}")
+                return None
+
+        logger.error(f"Failed to create {asset_type_endpoint} '{device_name}': too many rejected fields")
+        return None
+
+    def update_asset(self, asset_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Update an existing Asset in ServiceDesk Plus.
+
+        Uses the generic /assets/{id} endpoint which works for all asset types.
+
+        SAFETY: This operation is BLOCKED if dry_run=True (default).
+
+        Args:
+            asset_id: The SDP asset ID to update
+            data: Dictionary of flat field values to update
+
+        Returns:
+            Updated asset data dictionary if successful
+            {"dry_run": True, ...} if in dry_run mode
+            None if update failed
+        """
+        if self.dry_run:
+            logger.info(f"[DRY RUN] Would update asset/{asset_id}: {data.get('name', 'unknown')}")
+            return {"dry_run": True, "would_update": data, "asset_id": asset_id}
+
+        # Build flat payload
+        asset_data = {}
+        for key, value in data.items():
+            if value is None or value == "":
+                continue
+            asset_data[key] = value
+
+        payload = {"asset": asset_data}
+        endpoint = f"/assets/{asset_id}"
+        device_name = data.get('name', 'unknown')
+
+        # Retry loop for EXTRA_KEY_FOUND_IN_JSON
+        max_field_retries = 5
+        for field_attempt in range(max_field_retries + 1):
+            try:
+                logger.debug(f"UPDATE payload for asset/{asset_id}: {json.dumps(payload, indent=2)}")
+                result = self._make_request("PUT", endpoint, data=payload)
+                logger.info(f"Updated asset/{asset_id}: {device_name}")
                 return result
             except ServiceDeskPlusClientError as e:
                 error_str = str(e)
 
-                # Check for 404 — endpoint doesn't exist for this CI type
-                if "404" in error_str and "Invalid URL" in error_str:
+                if "404" in error_str:
                     logger.error(
-                        f"Cannot update {ci_type}/{ci_id} '{device_name}': "
-                        f"SDP API does not support updating this CI type via REST"
+                        f"Cannot update asset/{asset_id} '{device_name}': "
+                        f"Asset not found in SDP"
                     )
                     return None
 
                 extra_fields = self._parse_extra_key_fields(error_str)
 
                 if extra_fields and field_attempt < max_field_retries:
-                    attrs = ci_data.get(ci_type, {}).get("ci_attributes", {})
                     for field in extra_fields:
-                        if field in attrs:
-                            del attrs[field]
+                        if field in asset_data:
+                            del asset_data[field]
                             logger.warning(
-                                f"Field '{field}' not supported on {ci_type}, "
+                                f"Field '{field}' not supported on assets, "
                                 f"removed and retrying ({device_name})"
                             )
                     continue
 
-                logger.error(f"Failed to update {ci_type}/{ci_id} '{device_name}': {e}")
+                logger.error(f"Failed to update asset/{asset_id} '{device_name}': {e}")
                 return None
 
-        logger.error(f"Failed to update {ci_type}/{ci_id} '{device_name}': too many rejected fields")
+        logger.error(f"Failed to update asset/{asset_id} '{device_name}': too many rejected fields")
         return None
 
-    def delete_ci(self, ci_type: str, ci_id: str) -> bool:
+    def delete_asset(self, asset_id: str) -> bool:
         """
-        Delete a CI (Configuration Item) from CMDB.
+        Delete an asset from ServiceDesk Plus.
 
         SAFETY: This operation is BLOCKED if dry_run=True (default).
 
         Args:
-            ci_type: The CI type (e.g., "ci_windows_workstation")
-            ci_id: The unique CI ID to delete
+            asset_id: The SDP asset ID to delete
 
         Returns:
-            True if deleted successfully
-            True if in dry_run mode (simulated success)
-            False if deletion failed
-
-        Warning:
-            This permanently deletes the CI from CMDB!
+            True if deleted successfully, False if failed
         """
-        # SAFETY: Block in dry_run mode
         if self.dry_run:
-            logger.info(f"[DRY RUN] Would delete {ci_type}/{ci_id}")
-            return True  # Simulate success
-
-        endpoint = f"/cmdb/{ci_type}/{ci_id}"
+            logger.info(f"[DRY RUN] Would delete asset/{asset_id}")
+            return True
 
         try:
-            self._make_request("DELETE", endpoint)
-            logger.info(f"Deleted {ci_type}/{ci_id}")
+            self._make_request("DELETE", f"/assets/{asset_id}")
+            logger.info(f"Deleted asset/{asset_id}")
             return True
         except ServiceDeskPlusClientError as e:
-            logger.error(f"Failed to delete {ci_type}/{ci_id}: {e}")
+            logger.error(f"Failed to delete asset/{asset_id}: {e}")
             return False
 
 
@@ -908,18 +758,18 @@ class SDPClient(ServiceDeskPlusClient):
     Simplified SDP client for sync operations.
 
     This is a convenience wrapper that automatically loads configuration
-    from credentials.env file. Use this for quick scripts and automation.
+    from credentials.env file.
 
     Example:
         >>> from src.sdp_client import SDPClient
         >>>
         >>> # Read-only mode (safe)
         >>> client = SDPClient(dry_run=True)
-        >>> workstations = client.get_all_cmdb_workstations()
+        >>> assets = client.get_all_assets()
         >>>
-        >>> # Write mode (creates/updates CIs)
+        >>> # Write mode (creates/updates assets)
         >>> client = SDPClient(dry_run=False)
-        >>> client.create_ci("ci_windows_workstation", {"name": "NEW-PC"})
+        >>> client.create_asset("asset_virtual_machines", {"name": "NEW-VM-001"})
     """
 
     def __init__(self, dry_run: bool = False):

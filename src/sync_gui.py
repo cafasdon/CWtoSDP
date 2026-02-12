@@ -937,23 +937,23 @@ class SyncGUI:
                 logger.warning("CW devices table not found")
 
             # =====================================================================
-            # Load ALL SDP workstations
+            # Load ALL SDP assets
             # =====================================================================
             try:
-                # First check which columns exist (using sdp_workstations)
-                cursor.execute("PRAGMA table_info(sdp_workstations)")
+                # First check which columns exist (using sdp_assets)
+                cursor.execute("PRAGMA table_info(sdp_assets)")
                 available_cols = {row[1] for row in cursor.fetchall()}
                 
                 # Build dynamic SELECT based on available columns
-                select_cols = ["ci_id", "name"]
+                select_cols = ["asset_id", "name"]
                 if "serial_number" in available_cols:
                     select_cols.append("serial_number")
                 if "ip_address" in available_cols:
                     select_cols.append("ip_address")
                     
-                cursor.execute(f"SELECT {', '.join(select_cols)} FROM sdp_workstations")
+                cursor.execute(f"SELECT {', '.join(select_cols)} FROM sdp_assets")
                 for row in cursor.fetchall():
-                    sdp_id = str(row["ci_id"]) if row["ci_id"] else ""
+                    sdp_id = str(row["asset_id"]) if row["asset_id"] else ""
                     name = row["name"] or "(no name)"
                     # Safely get optional columns
                     serial = row["serial_number"] if "serial_number" in available_cols else ""
@@ -1123,7 +1123,7 @@ class SyncGUI:
 
             # Check SDP table
             try:
-                cursor.execute("SELECT COUNT(*) FROM sdp_workstations")
+                cursor.execute("SELECT COUNT(*) FROM sdp_assets")
                 result['sdp_count'] = cursor.fetchone()[0]
                 result['sdp_available'] = result['sdp_count'] > 0
             except sqlite3.OperationalError:
@@ -1241,8 +1241,8 @@ class SyncGUI:
                         sdp_data = mapper.get_sdp_data()
                         category = sdp_data.pop("_category")
 
-                        # Determine target SDP CI type
-                        sdp_ci_type = self.engine.CI_TYPE_MAP.get(category, "ci_windows_workstation")
+                        # Determine target SDP Asset type endpoint
+                        sdp_ci_type = self.engine.ASSET_TYPE_MAP.get(category, "asset_workstations")
 
                         # All items are CREATE since we can't match without SDP data
                         item = SyncItem(
@@ -1401,12 +1401,12 @@ class SyncGUI:
         # Clear existing
         self.cat_tree.delete(*self.cat_tree.get_children())
 
-        ci_type_map = {
-            "Laptop": "ci_windows_workstation",
-            "Desktop": "ci_windows_workstation",
-            "Virtual Server": "ci_virtual_machine",
-            "Physical Server": "ci_windows_server",
-            "Network Device": "ci_switch",
+        asset_type_map = {
+            "Laptop": "asset_workstations",
+            "Desktop": "asset_workstations",
+            "Virtual Server": "asset_virtual_machines",
+            "Physical Server": "asset_servers",
+            "Network Device": "asset_switches",
         }
 
         for category in sorted(self.summary.get("by_category", {}).keys()):
@@ -1414,7 +1414,7 @@ class SyncGUI:
             cat_items = [i for i in self.items if i.cw_category == category]
             creates = len([i for i in cat_items if i.action == SyncAction.CREATE])
             updates = len([i for i in cat_items if i.action == SyncAction.UPDATE])
-            sdp_type = ci_type_map.get(category, "ci_windows_workstation")
+            sdp_type = asset_type_map.get(category, "asset_workstations")
 
             self.cat_tree.insert("", tk.END, values=(
                 category, count, creates, updates, sdp_type
@@ -1428,11 +1428,11 @@ class SyncGUI:
         self.ci_tree.delete(*self.ci_tree.get_children())
 
         ci_mappings = [
-            ("Laptop", "ci_windows_workstation", "ThinkPads, ProBooks, etc.", 0),
-            ("Desktop", "ci_windows_workstation", "Physical workstations", 0),
-            ("Virtual Server", "ci_virtual_machine", "VMware VMs", 0),
-            ("Physical Server", "ci_windows_server", "Physical servers", 0),
-            ("Network Device", "ci_switch", "Switches, routers, firewalls", 0),
+            ("Laptop", "asset_workstations", "ThinkPads, ProBooks, etc.", 0),
+            ("Desktop", "asset_workstations", "Physical workstations", 0),
+            ("Virtual Server", "asset_virtual_machines", "VMware VMs", 0),
+            ("Physical Server", "asset_servers", "Physical servers", 0),
+            ("Network Device", "asset_switches", "Switches, routers, firewalls", 0),
         ]
 
         for cat, ci_type, desc, _ in ci_mappings:
@@ -1756,7 +1756,7 @@ class SyncGUI:
                     # =========================================================
                     # CREATE: New asset in SDP
                     # =========================================================
-                    result = sdp.create_ci(item.sdp_ci_type, item.fields_to_sync)
+                    result = sdp.create_asset(item.sdp_ci_type, item.fields_to_sync)
                     if result:
                         success_count += 1
                         if is_dry_run:
@@ -1768,12 +1768,12 @@ class SyncGUI:
                             result_entry["status"] = "created"
                             result_entry["message"] = "Created successfully"
                             # Track for revert
-                            sdp_id = result.get(item.sdp_ci_type, {}).get("id")
+                            sdp_id = result.get("asset", result.get(item.sdp_ci_type.rstrip('s'), {})).get("id")
                             if sdp_id:
                                 result_entry["sdp_id"] = sdp_id
                                 created_ids.append({
                                     "sdp_id": sdp_id,
-                                    "ci_type": item.sdp_ci_type,
+                                    "asset_type": item.sdp_ci_type,
                                     "name": item.cw_name,
                                     "action": "create"
                                 })
@@ -1793,7 +1793,7 @@ class SyncGUI:
                         result_entry["status"] = "failed"
                         result_entry["message"] = "Missing SDP ID for update"
                     else:
-                        result = sdp.update_ci(item.sdp_ci_type, item.sdp_id, item.fields_to_sync)
+                        result = sdp.update_asset(item.sdp_id, item.fields_to_sync)
                         if result:
                             success_count += 1
                             if is_dry_run:
@@ -2064,7 +2064,7 @@ class SyncGUI:
             success = 0
             for item in items:
                 try:
-                    sdp.delete_ci(item['ci_type'], item['sdp_id'])
+                    sdp.delete_asset(item['sdp_id'])
                     success += 1
                 except Exception as e:
                     logger.error(f"Failed to delete {item['name']}: {e}")
@@ -2431,7 +2431,7 @@ class SyncGUI:
     def _do_refresh_sdp(self):
         """
         Background thread for SDP refresh with incremental fetch optimization.
-        Refactored to use standard Database class and sdp_workstations table.
+        Refactored to use standard Database class and sdp_assets table.
         """
         db = None
         try:
@@ -2448,16 +2448,16 @@ class SyncGUI:
             self.root.after(0, lambda: self._update_sdp_progress(0, 100,
                 "Checking existing data...", "Optimizing API calls"))
 
-            # Get existing workstation IDs via public API
-            existing_ids = db.get_sdp_workstation_ids()
+            # Get existing asset IDs via public API
+            existing_ids = db.get_sdp_asset_ids()
 
             already_have = len(existing_ids)
-            logger.info(f"Found {already_have} existing SDP workstations in database")
+            logger.info(f"Found {already_have} existing SDP assets in database")
 
             # Update initial status
             self.root.after(0, lambda: self._update_sdp_progress(0, 100,
-                f"Fetching workstations... ({already_have} already in DB)", ""))
-            logger.info("Fetching SDP workstations...")
+                f"Fetching assets... ({already_have} already in DB)", ""))
+            logger.info("Fetching SDP assets...")
 
             # Track new vs existing during fetch
             new_count = 0
@@ -2485,9 +2485,9 @@ class SyncGUI:
                 self.root.after(0, lambda f=fetched, t=total, s=status, d=rate_status:
                                 self._update_sdp_progress(f, t if t > 0 else fetched, s, d))
 
-            # Fetch all workstations with progress callback
+            # Fetch all assets with progress callback
             # (API requires fetching all pages - we optimize by not storing existing)
-            workstations = self._sdp_client.get_all_cmdb_workstations(progress_callback=on_progress)
+            workstations = self._sdp_client.get_all_assets(progress_callback=on_progress)
 
             if self._sdp_cancelled:
                 db.close()
@@ -2501,11 +2501,11 @@ class SyncGUI:
 
             stored = 0
             if workstations:
-                stored = db.store_sdp_workstations(workstations)
+                stored = db.store_sdp_assets(workstations)
 
             db.close()
             db = None
-            logger.info(f"Stored {stored} SDP workstations (Total fetched: {len(workstations)})")
+            logger.info(f"Stored {stored} SDP assets (Total fetched: {len(workstations)})")
             self.root.after(0, lambda: self._sdp_refresh_done_incremental(stored, skipped_count))
 
         except Exception as e:
@@ -2583,7 +2583,7 @@ class SyncGUI:
                 pass  # Table doesn't exist yet
 
             try:
-                cursor.execute("SELECT COUNT(*) FROM sdp_workstations")
+                cursor.execute("SELECT COUNT(*) FROM sdp_assets")
                 sdp_count = cursor.fetchone()[0]
             except sqlite3.OperationalError:
                 pass  # Table doesn't exist yet
@@ -2596,14 +2596,14 @@ class SyncGUI:
             except sqlite3.OperationalError:
                 pass  # Table doesn't exist yet
 
-            # Check last fetch times from cw_devices and sdp_workstations
+            # Check last fetch times from cw_devices and sdp_assets
             try:
                 cursor.execute("""
                     SELECT 'ConnectWise' AS source, MAX(fetched_at) AS last_fetch, COUNT(*) AS total
                     FROM cw_devices
                     UNION ALL
                     SELECT 'ServiceDesk Plus', MAX(fetched_at), COUNT(*)
-                    FROM sdp_workstations
+                    FROM sdp_assets
                 """)
                 fetch_info = [(r[0], r[1], r[2]) for r in cursor.fetchall() if r[1]]
             except sqlite3.OperationalError:
@@ -3147,11 +3147,11 @@ CI TYPE MAPPING
 
   Category          → SDP CI Type
   ─────────────────────────────────────────────────────────
-  Laptop            → ci_windows_workstation
-  Desktop           → ci_windows_workstation
-  Virtual Server    → ci_virtual_machine
-  Physical Server   → ci_windows_server
-  Network Device    → ci_switch
+  Laptop            → asset_workstations
+  Desktop           → asset_workstations
+  Virtual Server    → asset_virtual_machines
+  Physical Server   → asset_servers
+  Network Device    → asset_switches
 
 ═══════════════════════════════════════════════════════════
 FIELD MAPPING (ConnectWise → ServiceDesk Plus)
