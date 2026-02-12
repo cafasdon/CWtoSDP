@@ -626,6 +626,45 @@ class ServiceDeskPlusClient:
     # WRITE OPERATIONS (Blocked in dry_run mode for safety)
     # =========================================================================
 
+    @staticmethod
+    def _parse_extra_key_fields(error_message: str) -> list:
+        """
+        Parse an SDP error response to find fields rejected as EXTRA_KEY_FOUND_IN_JSON.
+
+        When a CI type doesn't support a particular attribute (e.g. ci_virtual_machine
+        doesn't have txt_os), SDP returns a 400 with a JSON body listing the offending
+        field names. This method extracts those field names so they can be stripped
+        from the payload and the request retried.
+
+        Args:
+            error_message: The full error string from ServiceDeskPlusClientError
+
+        Returns:
+            List of rejected field names (e.g. ['ci_attributes_txt_os']),
+            or empty list if the error is not an EXTRA_KEY issue.
+        """
+        extra_fields = []
+        try:
+            # Error format: "Request failed: 400 - {json}"
+            # Find the JSON portion after the status code
+            json_start = error_message.find('{')
+            if json_start == -1:
+                return []
+
+            error_json = json.loads(error_message[json_start:])
+            messages = error_json.get("response_status", {}).get("messages", [])
+
+            for msg in messages:
+                if msg.get("message") == "EXTRA_KEY_FOUND_IN_JSON":
+                    field = msg.get("field")
+                    if field:
+                        extra_fields.append(field)
+
+        except (json.JSONDecodeError, KeyError, TypeError):
+            pass  # Not a parseable EXTRA_KEY error — let caller handle it
+
+        return extra_fields
+
     def create_ci(self, ci_type: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Create a new CI (Configuration Item) in CMDB.
@@ -686,15 +725,40 @@ class ServiceDeskPlusClient:
 
         # Build endpoint - pass raw dict, _make_request handles JSON serialization
         endpoint = f"/cmdb/{ci_type}"
+        device_name = data.get('name', 'unknown')
 
-        try:
-            logger.debug(f"CREATE payload for {ci_type}: {json.dumps(ci_data, indent=2)}")
-            result = self._make_request("POST", endpoint, data=ci_data)
-            logger.info(f"Created {ci_type}: {data.get('name', 'unknown')}")
-            return result
-        except ServiceDeskPlusClientError as e:
-            logger.error(f"Failed to create {ci_type} '{data.get('name', 'unknown')}': {e}")
-            return None
+        # Retry loop: auto-strip fields rejected by SDP as EXTRA_KEY_FOUND_IN_JSON
+        # Different CI types accept different attributes — this handles mismatches
+        # dynamically without maintaining a manual exclusion list.
+        max_field_retries = 5  # Safety cap (one retry per rejected field)
+        for field_attempt in range(max_field_retries + 1):
+            try:
+                logger.debug(f"CREATE payload for {ci_type}: {json.dumps(ci_data, indent=2)}")
+                result = self._make_request("POST", endpoint, data=ci_data)
+                logger.info(f"Created {ci_type}: {device_name}")
+                return result
+            except ServiceDeskPlusClientError as e:
+                error_str = str(e)
+                extra_fields = self._parse_extra_key_fields(error_str)
+
+                if extra_fields and field_attempt < max_field_retries:
+                    # Remove rejected fields and retry
+                    attrs = ci_data.get(ci_type, {}).get("ci_attributes", {})
+                    for field in extra_fields:
+                        if field in attrs:
+                            del attrs[field]
+                            logger.warning(
+                                f"Field '{field}' not supported on {ci_type}, "
+                                f"removed and retrying ({device_name})"
+                            )
+                    continue  # Retry without the rejected field(s)
+
+                # Non-retryable error or max retries exhausted
+                logger.error(f"Failed to create {ci_type} '{device_name}': {e}")
+                return None
+
+        logger.error(f"Failed to create {ci_type} '{device_name}': too many rejected fields")
+        return None
 
     def update_ci(self, ci_type: str, ci_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
@@ -757,15 +821,36 @@ class ServiceDeskPlusClient:
 
         # Build endpoint - pass raw dict, _make_request handles JSON serialization
         endpoint = f"/cmdb/{ci_type}/{ci_id}"
+        device_name = data.get('name', 'unknown')
 
-        try:
-            logger.debug(f"UPDATE payload for {ci_type}/{ci_id}: {json.dumps(ci_data, indent=2)}")
-            result = self._make_request("PUT", endpoint, data=ci_data)
-            logger.info(f"Updated {ci_type}/{ci_id}: {data.get('name', 'unknown')}")
-            return result
-        except ServiceDeskPlusClientError as e:
-            logger.error(f"Failed to update {ci_type}/{ci_id} '{data.get('name', 'unknown')}': {e}")
-            return None
+        # Retry loop: auto-strip fields rejected by SDP as EXTRA_KEY_FOUND_IN_JSON
+        max_field_retries = 5
+        for field_attempt in range(max_field_retries + 1):
+            try:
+                logger.debug(f"UPDATE payload for {ci_type}/{ci_id}: {json.dumps(ci_data, indent=2)}")
+                result = self._make_request("PUT", endpoint, data=ci_data)
+                logger.info(f"Updated {ci_type}/{ci_id}: {device_name}")
+                return result
+            except ServiceDeskPlusClientError as e:
+                error_str = str(e)
+                extra_fields = self._parse_extra_key_fields(error_str)
+
+                if extra_fields and field_attempt < max_field_retries:
+                    attrs = ci_data.get(ci_type, {}).get("ci_attributes", {})
+                    for field in extra_fields:
+                        if field in attrs:
+                            del attrs[field]
+                            logger.warning(
+                                f"Field '{field}' not supported on {ci_type}, "
+                                f"removed and retrying ({device_name})"
+                            )
+                    continue
+
+                logger.error(f"Failed to update {ci_type}/{ci_id} '{device_name}': {e}")
+                return None
+
+        logger.error(f"Failed to update {ci_type}/{ci_id} '{device_name}': too many rejected fields")
+        return None
 
     def delete_ci(self, ci_type: str, ci_id: str) -> bool:
         """
