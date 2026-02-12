@@ -228,15 +228,19 @@ This is normal - the database is created automatically. If errors persist:
 
 ### Log Files
 
-Logs are stored in `logs/cwtosdp_YYYYMMDD.log`. Check for detailed errors:
+Logs are stored in `logs/cwtosdp.log` (rotating, up to 5 files of 5MB each). Check for detailed errors:
 
 ```bash
 # Windows
-type logs\cwtosdp_*.log
+type logs\cwtosdp.log
 
 # macOS/Linux
-cat logs/cwtosdp_*.log
+cat logs/cwtosdp.log
 ```
+
+On Windows with the installer, the full path is: `%USERPROFILE%\CWtoSDP\logs\cwtosdp.log`
+
+You can navigate there quickly: press **Win + R**, paste `%USERPROFILE%\CWtoSDP\logs`, and press Enter.
 
 ---
 

@@ -224,9 +224,29 @@ For UPDATE items, each field shows what will happen:
 ### Selection Behavior
 
 - **Single-click** on any row toggles its selection (☑/☐)
-- **✓ All / ✗ All** - Select/deselect ALL items (including filtered out)
-- **✓ Filtered / ✗ Filtered** - Select/deselect only currently visible items
+- **Shift+click** to highlight multiple, then press **Space** to toggle all highlighted
 - Selections persist when filters change
+
+**Selection Buttons:**
+
+| Button | Action |
+|--------|--------|
+| **Select All** | Ticks every item in the list |
+| **Select None** | Unticks everything |
+| **Select Filtered** | Ticks only the currently visible (filtered) items |
+| **Deselect Filtered** | Unticks only the currently visible items |
+| **Select Creates Only** | Ticks only items that would be created (new CIs) |
+
+**What happens when you sync:**
+
+| Scenario | Behavior |
+|---|---|
+| Some items ticked | Only those ticked items (CREATE or UPDATE) are synced |
+| Nothing ticked | Falls back to syncing **all** CREATE and UPDATE items |
+| Ticked items are all SKIP | Shows alert: *"No CREATE or UPDATE items in your selection"* |
+| No items need syncing | Shows alert: *"All CW devices are already up-to-date in SDP"* |
+
+The confirmation dialog always shows **"Selection: SELECTED (N items)"** or **"Selection: ALL (N items)"** so you know exactly what will be processed before confirming.
 
 ### Dry Run vs Real Sync
 
@@ -516,9 +536,30 @@ You can set the data center in **⚙️ Settings** or in `credentials.env` — s
 - [API Reference](docs/ManageEngine-ServiceDesk-API.md) — ServiceDesk Plus API documentation
 - [License](LICENSE) — Dual license (free for non-commercial use)
 
+## Troubleshooting
+
+### Log Files
+
+Logs are stored at `logs/cwtosdp.log` (rotating, up to 5 files of 5MB each):
+
+```bash
+# Windows
+type logs\cwtosdp.log
+
+# macOS / Linux
+cat logs/cwtosdp.log
+```
+
+On Windows with the installer, the full path is: `%USERPROFILE%\CWtoSDP\logs\cwtosdp.log`
+
+You can also navigate there directly: press **Win + R**, paste `%USERPROFILE%\CWtoSDP\logs`, and press Enter.
+
+---
+
 ## Version History
 
 | Version | Date | Changes |
 | ------- | ---- | ------- |
+| 1.2.0 | 2026-02-12 | Fixed SDP create/update failures (HTTP 2xx acceptance), fixed unclosable progress window, fixed first-run crash when credentials are missing, improved error logging with device names |
 | 1.1.0 | 2026-02-06 | Adaptive rate limiting with dynamic recovery, two-level dry run safety, CREATE + UPDATE sync, improved error handling |
 | 1.0.0 | 2026-01-20 | Initial release — GUI sync manager, device classification, field mapping, dry run |
