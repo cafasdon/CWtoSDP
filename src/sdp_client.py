@@ -833,6 +833,15 @@ class ServiceDeskPlusClient:
                 return result
             except ServiceDeskPlusClientError as e:
                 error_str = str(e)
+
+                # Check for 404 — endpoint doesn't exist for this CI type
+                if "404" in error_str and "Invalid URL" in error_str:
+                    logger.error(
+                        f"Cannot update {ci_type}/{ci_id} '{device_name}': "
+                        f"SDP API does not support updating this CI type via REST"
+                    )
+                    return None
+
                 extra_fields = self._parse_extra_key_fields(error_str)
 
                 if extra_fields and field_attempt < max_field_retries:

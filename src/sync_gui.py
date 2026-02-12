@@ -340,11 +340,11 @@ class SyncGUI:
         self.stats_frame.pack(side=tk.RIGHT, padx=20)
 
     def _on_real_sync_toggle(self):
-        """Update sync button text based on real sync checkbox."""
+        """Update sync button text and ensure it's enabled (called after sync too)."""
         if self.real_sync_var.get():
-            self.sync_btn.config(text="⚠️ Execute Real Sync")
+            self.sync_btn.config(text="⚠️ Execute Real Sync", state=tk.NORMAL)
         else:
-            self.sync_btn.config(text="🔍 Preview Sync (Dry Run)")
+            self.sync_btn.config(text="🔍 Preview Sync (Dry Run)", state=tk.NORMAL)
 
     def _create_preview_tab(self):
         """Create the sync preview tab with ALL fields visible and selection support."""

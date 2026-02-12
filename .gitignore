@@ -50,3 +50,6 @@ verify_*.py
 
 # Augment agent folder
 .agent/
+
+# Local test suite (development only)
+tests/
