@@ -3037,12 +3037,12 @@ class HelpDialog:
         content = """CWtoSDP SYNC MANAGER - GETTING STARTED
 ======================================
 
-This tool synchronizes devices from ConnectWise RMM to ServiceDesk Plus CMDB.
+This tool synchronizes devices from ConnectWise RMM to ServiceDesk Plus Assets.
 
 QUICK START:
 1. Click ⚙️ Settings to configure your API credentials
 2. Click 🔄 Refresh CW Data to fetch devices from ConnectWise
-3. Click 🔄 Refresh SDP Data to fetch existing CMDB entries
+3. Click 🔄 Refresh SDP Data to fetch existing SDP assets
 4. Review the Sync Preview tab to see what will be synced
 5. Use checkboxes to select which items to sync
 6. Click 🔍 Preview Sync to see what would happen (dry run)
@@ -3086,7 +3086,7 @@ DEVICE CLASSIFICATION:
         content = """HOW CWtoSDP WORKS
 =================
 
-This tool syncs device data from ConnectWise RMM to ServiceDesk Plus CMDB.
+This tool syncs device data from ConnectWise RMM to ServiceDesk Plus Assets.
 
 ═══════════════════════════════════════════════════════════
 WHAT THE PROGRAM DOES
@@ -3094,7 +3094,7 @@ WHAT THE PROGRAM DOES
 
 1. FETCH DATA
    • Connects to ConnectWise RMM API → fetches all endpoints
-   • Connects to ServiceDesk Plus API → fetches existing CMDB CIs
+   • Connects to ServiceDesk Plus API → fetches existing assets
    • Stores data locally in SQLite database for comparison
 
 2. CLASSIFY DEVICES
@@ -3177,14 +3177,14 @@ CI TYPE MAPPING
 FIELD MAPPING (ConnectWise → ServiceDesk Plus)
 ═══════════════════════════════════════════════════════════
 
-  CW Field                → SDP CI Attribute
+  CW Field                → SDP Asset Field
   ─────────────────────────────────────────────────────────
   friendlyName            → name
-  system.serialNumber     → ci_attributes.txt_serial_number
-  operatingSystem.name    → ci_attributes.txt_os
-  system.manufacturer     → ci_attributes.txt_manufacturer
-  addresses[0].ipAddress  → ci_attributes.txt_ip_address
-  addresses[0].macAddress → ci_attributes.txt_mac_address
+  system.serialNumber     → serial_number
+  operatingSystem.name    → operating_system.os
+  system.manufacturer     → computer_system.system_manufacturer
+  addresses[0].ipAddress  → ip_address
+  addresses[0].macAddress → mac_address
 
 ═══════════════════════════════════════════════════════════
 SELECTION BEHAVIOR

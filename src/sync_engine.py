@@ -4,7 +4,7 @@ Sync Engine: ConnectWise → ServiceDesk Plus Synchronization
 ================================================================================
 
 This module contains the core synchronization logic for syncing devices from
-ConnectWise RMM to ServiceDesk Plus CMDB. It handles:
+ConnectWise RMM to ServiceDesk Plus Assets. It handles:
 
 1. Loading device data from the local SQLite database
 2. Matching CW devices to existing SDP records (by hostname or serial)

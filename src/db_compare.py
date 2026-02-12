@@ -24,10 +24,10 @@ The database contains these main tables:
    - fetched_at: Timestamp of fetch
    - ... (many more dynamically created columns)
 
-2. sdp_workstations_full - SDP workstations with ALL fields as columns
+2. sdp_assets_full - SDP assets with ALL fields as columns
    - sdp_id: Unique SDP identifier
-   - name: CI name
-   - ci_attributes_txt_serial_number: Serial number
+   - name: Asset name
+   - serial_number: Serial number
    - raw_json: Original JSON for reference
    - fetched_at: Timestamp of fetch
    - ... (many more dynamically created columns)
@@ -57,7 +57,7 @@ Usage Example:
     db.store_cw_devices_full(cw_devices)
 
     # Store SDP workstations
-    db.store_sdp_workstations_full(sdp_workstations)
+    db.store_sdp_assets_full(sdp_workstations)
 
     # Compare columns
     comparison = db.get_column_comparison()
@@ -150,7 +150,23 @@ class CompareDatabase:
             self._conn = sqlite3.connect(str(self.db_path))
             # Row factory allows accessing columns by name
             self._conn.row_factory = sqlite3.Row
+            # Clean up orphaned tables from old CMDB schema
+            self._cleanup_orphaned_tables()
         return self._conn
+
+    def _cleanup_orphaned_tables(self):
+        """Drop orphaned tables left over from the CMDB → Assets API migration."""
+        cursor = self._conn.cursor()
+        orphaned = ["sdp_workstations_full"]
+        for table in orphaned:
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                (table,)
+            )
+            if cursor.fetchone():
+                cursor.execute(f"DROP TABLE {table}")
+                logger.info(f"Cleaned up orphaned table: {table}")
+        self._conn.commit()
 
     def close(self):
         """
@@ -355,7 +371,7 @@ class CompareDatabase:
 
         # Check if table exists
         cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='sdp_workstations_full'"
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='sdp_assets_full'"
         )
         if not cursor.fetchone():
             # Table doesn't exist - need to fetch all
@@ -363,7 +379,7 @@ class CompareDatabase:
             return list(all_ws_ids)
 
         # Check which columns exist (to see if we have detailed data)
-        cursor.execute("PRAGMA table_info(sdp_workstations_full)")
+        cursor.execute("PRAGMA table_info(sdp_assets_full)")
         columns = {row[1] for row in cursor.fetchall()}
 
         # Key field that indicates detailed data
@@ -379,7 +395,7 @@ class CompareDatabase:
 
         for ws_id in all_ws_ids:
             cursor.execute(
-                'SELECT name FROM sdp_workstations_full WHERE id = ? OR sdp_id = ?',
+                'SELECT name FROM sdp_assets_full WHERE id = ? OR sdp_id = ?',
                 (ws_id, ws_id)
             )
             row = cursor.fetchone()
@@ -407,14 +423,14 @@ class CompareDatabase:
 
         # Check if table exists
         cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='sdp_workstations_full'"
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='sdp_assets_full'"
         )
         if not cursor.fetchone():
             return 0
 
         # Count workstations with non-null name
         cursor.execute(
-            "SELECT COUNT(*) FROM sdp_workstations_full WHERE name IS NOT NULL AND name != ''"
+            "SELECT COUNT(*) FROM sdp_assets_full WHERE name IS NOT NULL AND name != ''"
         )
         return cursor.fetchone()[0]
 
@@ -433,13 +449,13 @@ class CompareDatabase:
 
         # Check if table exists
         cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='sdp_workstations_full'"
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='sdp_assets_full'"
         )
         if not cursor.fetchone():
             return set()
 
         # Get all existing IDs (check both 'id' and 'sdp_id' columns for compatibility)
-        cursor.execute("PRAGMA table_info(sdp_workstations_full)")
+        cursor.execute("PRAGMA table_info(sdp_assets_full)")
         columns = {row[1] for row in cursor.fetchall()}
 
         existing_ids = set()
@@ -447,7 +463,7 @@ class CompareDatabase:
         # Try sdp_id column first (preferred)
         if "sdp_id" in columns:
             cursor.execute(
-                "SELECT sdp_id FROM sdp_workstations_full WHERE sdp_id IS NOT NULL"
+                "SELECT sdp_id FROM sdp_assets_full WHERE sdp_id IS NOT NULL"
             )
             existing_ids.update(str(row[0]) for row in cursor.fetchall())
 
@@ -681,7 +697,7 @@ class CompareDatabase:
 
         # Ensure table exists
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS sdp_workstations_full (
+            CREATE TABLE IF NOT EXISTS sdp_assets_full (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 sdp_id TEXT UNIQUE,
                 raw_json TEXT,
@@ -696,7 +712,7 @@ class CompareDatabase:
             # Add missing columns dynamically
             for key in flattened.keys():
                 try:
-                    cursor.execute(f'ALTER TABLE sdp_workstations_full ADD COLUMN "{key}" TEXT')
+                    cursor.execute(f'ALTER TABLE sdp_assets_full ADD COLUMN "{key}" TEXT')
                 except sqlite3.OperationalError:
                     pass  # Column already exists
 
@@ -707,7 +723,7 @@ class CompareDatabase:
             values = [str(v) if v is not None and not isinstance(v, str) else v for v in values]
 
             col_str = '", "'.join(cols)
-            sql = f'INSERT OR REPLACE INTO sdp_workstations_full ("{col_str}") VALUES ({", ".join(placeholders)})'
+            sql = f'INSERT OR REPLACE INTO sdp_assets_full ("{col_str}") VALUES ({", ".join(placeholders)})'
             cursor.execute(sql, values)
             conn.commit()
 
@@ -718,7 +734,7 @@ class CompareDatabase:
             logger.warning(f"Failed to store SDP workstation {ws_id}: {e}")
             return False
 
-    def store_sdp_workstations_full(self, workstations: List[Dict[str, Any]]) -> int:
+    def store_sdp_assets_full(self, workstations: List[Dict[str, Any]]) -> int:
         """
         Store ServiceDesk Plus workstations with ALL fields as columns.
 
@@ -732,7 +748,7 @@ class CompareDatabase:
             return 0
 
         # Create table dynamically based on data
-        all_keys = self._create_table_from_data("sdp_workstations_full", workstations)
+        all_keys = self._create_table_from_data("sdp_assets_full", workstations)
 
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -752,7 +768,7 @@ class CompareDatabase:
                 values = [str(v) if v is not None and not isinstance(v, str) else v for v in values]
 
                 col_str = '", "'.join(cols)
-                sql = f'INSERT INTO sdp_workstations_full ("{col_str}") VALUES ({", ".join(placeholders)})'
+                sql = f'INSERT INTO sdp_assets_full ("{col_str}") VALUES ({", ".join(placeholders)})'
                 cursor.execute(sql, values)
                 stored += 1
             except Exception as e:
@@ -773,7 +789,7 @@ class CompareDatabase:
         """Get all column names from SDP table."""
         conn = self._get_connection()
         cursor = conn.cursor()
-        cursor.execute("PRAGMA table_info(sdp_workstations_full)")
+        cursor.execute("PRAGMA table_info(sdp_assets_full)")
         return [row[1] for row in cursor.fetchall()]
 
     def get_column_comparison(self) -> Dict[str, Any]:

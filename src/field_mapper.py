@@ -4,7 +4,7 @@ Field Mapper: ConnectWise → ServiceDesk Plus Field Mapping
 ================================================================================
 
 This module handles the transformation of device data from ConnectWise RMM
-format to ServiceDesk Plus CMDB format. It includes:
+format to ServiceDesk Plus Assets API format. It includes:
 
 1. Device Classification - Categorizing devices into SDP asset types
 2. Field Mapping - Translating CW field names to SDP field names
@@ -26,9 +26,9 @@ SDP CI Types:
 Field Mapping:
 --------------
 CW stores data in nested JSON structures. For example:
-- device.system.serialNumber → ci_attributes_txt_serial_number
-- device.os.product → ci_attributes_txt_os
-- device.networks[0].ipv4 → ci_attributes_txt_ip_address
+- device.system.serialNumber → serial_number
+- device.os.product → operating_system.os
+- device.networks[0].ipv4 → ip_address
 
 Usage Example:
 --------------
@@ -41,7 +41,7 @@ Usage Example:
     # Map all fields
     mapper = FieldMapper(cw_device)
     sdp_data = mapper.get_sdp_data()
-    print(sdp_data)  # {"name": "LAPTOP-001", "ci_attributes_txt_serial_number": "ABC123", ...}
+    print(sdp_data)  # {"name": "LAPTOP-001", "serial_number": "ABC123", ...}
 """
 
 import json

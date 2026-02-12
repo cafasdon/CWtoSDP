@@ -239,9 +239,9 @@ def fetch_connectwise_data(config: AppConfig) -> dict:
 
 def fetch_sdp_data(config: AppConfig) -> dict:
     """
-    Fetch data from ServiceDesk Plus CMDB (READ-ONLY).
+    Fetch data from ServiceDesk Plus Assets API (READ-ONLY).
 
-    Fetches workstation CIs from the ServiceDesk Plus CMDB
+    Fetches assets from the ServiceDesk Plus Assets API
     using Zoho OAuth2 authentication.
 
     Args:
@@ -249,7 +249,7 @@ def fetch_sdp_data(config: AppConfig) -> dict:
 
     Returns:
         Dictionary with:
-        - workstations: List of CMDB workstation CIs
+        - assets: List of SDP asset records
 
     Note:
         This is a READ-ONLY operation. No data is modified in SDP.

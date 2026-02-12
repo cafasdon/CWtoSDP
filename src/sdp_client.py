@@ -8,7 +8,7 @@ ServiceDesk Plus Cloud API. It handles:
 
 1. Zoho OAuth2 Authentication (refresh token flow)
 2. Automatic token refresh when tokens expire
-3. CMDB (Configuration Management Database) operations
+3. Asset management operations
 4. Retry logic for transient failures
 5. Dry-run mode for safe testing
 
@@ -21,9 +21,9 @@ ServiceDesk Plus API Overview:
 
 Main Endpoints Used:
 -------------------
-- GET /cmdb/ci_workstation - List CMDB workstations
-- POST /cmdb/{ci_type} - Create a new CI
-- DELETE /cmdb/{ci_type}/{id} - Delete a CI
+- GET /assets - List all assets
+- POST /{asset_type} - Create a new asset
+- DELETE /assets/{id} - Delete an asset
 - GET /assets - List assets
 
 Zoho OAuth2 Flow:
@@ -329,7 +329,7 @@ class ServiceDeskPlusClient:
 
         Args:
             method: HTTP method ("GET", "POST", "PUT", "DELETE")
-            endpoint: API path (e.g., "/cmdb/ci_workstation")
+            endpoint: API path (e.g., "/assets")
             data: Optional dictionary for request body
             **kwargs: Additional arguments passed to requests.request()
 
