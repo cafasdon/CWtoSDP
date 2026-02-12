@@ -695,20 +695,20 @@ class SyncGUI:
         else:
             changes = {k: "new" for k in item.fields_to_sync.keys()}
 
-        # Field display names
+        # Field display names — keys match what FieldMapper.get_sdp_data() returns
         field_names = {
             "name": "Device Name",
-            "ci_attributes_txt_serial_number": "Serial Number",
-            "ci_attributes_txt_os": "Operating System",
-            "ci_attributes_txt_manufacturer": "Manufacturer",
-            "ci_attributes_txt_ip_address": "IP Address",
-            "ci_attributes_txt_mac_address": "MAC Address",
+            "serial_number": "Serial Number",
+            "operating_system": "Operating System",
+            "computer_system": "Manufacturer",
+            "ip_address": "IP Address",
+            "mac_address": "MAC Address",
         }
 
         # Populate both trees with aligned fields
         for field_key, display_name in field_names.items():
-            cw_value = item.fields_to_sync.get(field_key, "")
-            sdp_value = item.sdp_existing_fields.get(field_key, "") if item.sdp_existing_fields else ""
+            cw_value = self._display_value(item.fields_to_sync.get(field_key, ""))
+            sdp_value = self._display_value(item.sdp_existing_fields.get(field_key, "")) if item.sdp_existing_fields else ""
 
             # Determine tag based on change status
             change_status = changes.get(field_key, "unchanged")
@@ -1351,11 +1351,11 @@ class SyncGUI:
                 item.match_reason or "-",
                 # SDP fields with change indicators - show placeholder if empty
                 display_fields.get("name") or no_data,
-                display_fields.get("ci_attributes_txt_serial_number") or no_data,
-                display_fields.get("ci_attributes_txt_os") or no_data,
-                display_fields.get("ci_attributes_txt_manufacturer") or no_data,
-                display_fields.get("ci_attributes_txt_ip_address") or no_data,
-                display_fields.get("ci_attributes_txt_mac_address") or no_data,
+                self._display_value(display_fields.get("serial_number")) or no_data,
+                self._display_value(display_fields.get("operating_system")) or no_data,
+                self._display_value(display_fields.get("computer_system")) or no_data,
+                self._display_value(display_fields.get("ip_address")) or no_data,
+                self._display_value(display_fields.get("mac_address")) or no_data,
             ), tags=(tag,))
 
         self._update_selection_label()
@@ -1378,23 +1378,43 @@ class SyncGUI:
         existing = existing or {}
         display = {}
         for field_name, value in fields.items():
-            if not value:
+            # Flatten nested dicts (e.g. {'os': 'Windows 11'} → 'Windows 11')
+            flat_value = self._display_value(value)
+            if not flat_value:
                 display[field_name] = ""
                 continue
 
             change_type = changes.get(field_name, "unchanged")
             if change_type == "new":
-                display[field_name] = f"★ {value}"  # Star = new field (was empty)
+                display[field_name] = f"★ {flat_value}"  # Star = new field (was empty)
             elif change_type == "changed":
-                old_val = existing.get(field_name, "")
+                old_val = self._display_value(existing.get(field_name, ""))
                 # Truncate long values for display
                 old_display = str(old_val)[:20] + "..." if len(str(old_val)) > 20 else str(old_val)
-                new_display = str(value)[:20] + "..." if len(str(value)) > 20 else str(value)
+                new_display = str(flat_value)[:20] + "..." if len(str(flat_value)) > 20 else str(flat_value)
                 display[field_name] = f"{old_display} → {new_display}"  # Show old→new
             else:
-                display[field_name] = str(value)  # No indicator = unchanged
+                display[field_name] = str(flat_value)  # No indicator = unchanged
 
         return display
+
+    @staticmethod
+    def _display_value(value):
+        """
+        Extract a human-readable string from a field value.
+
+        Handles nested dicts from the Assets API (e.g. {'os': 'Windows 11'} → 'Windows 11')
+        and returns plain strings as-is.
+        """
+        if value is None:
+            return ""
+        if isinstance(value, dict):
+            # Return the first non-empty value from the dict
+            for v in value.values():
+                if v:
+                    return str(v)
+            return ""
+        return str(value)
 
     def _populate_category_tab(self):
         """Populate category breakdown as proper GUI."""
@@ -1568,11 +1588,11 @@ class SyncGUI:
             item.sdp_ci_type,
             item.match_reason or "-",
             display_fields.get("name") or no_data,
-            display_fields.get("ci_attributes_txt_serial_number") or no_data,
-            display_fields.get("ci_attributes_txt_os") or no_data,
-            display_fields.get("ci_attributes_txt_manufacturer") or no_data,
-            display_fields.get("ci_attributes_txt_ip_address") or no_data,
-            display_fields.get("ci_attributes_txt_mac_address") or no_data,
+            self._display_value(display_fields.get("serial_number")) or no_data,
+            self._display_value(display_fields.get("operating_system")) or no_data,
+            self._display_value(display_fields.get("computer_system")) or no_data,
+            self._display_value(display_fields.get("ip_address")) or no_data,
+            self._display_value(display_fields.get("mac_address")) or no_data,
         ), tags=(tag,))
 
     def _select_all(self):

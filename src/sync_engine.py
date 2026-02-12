@@ -250,6 +250,8 @@ class SyncEngine:
         # =====================================================================
         sdp_lookup_name = {}
         sdp_lookup_serial = {}
+        # Product lookup: asset_type → most common product {"id": "..."}
+        product_counter = {}  # asset_type → Counter of product_id → count
 
         try:
             # Use main DB table 'sdp_assets'
@@ -266,9 +268,31 @@ class SyncEngine:
                 if serial and "VMWARE" not in serial.upper() and "VIRTUAL" not in serial.upper():
                     sdp_lookup_serial[serial.upper()] = row
 
+                # Build Product Lookup from raw_json
+                try:
+                    raw = json.loads(row["raw_json"])
+                    prod = raw.get("product")
+                    pt = raw.get("product_type", {}).get("api_plural_name")
+                    if prod and prod.get("id") and pt:
+                        if pt not in product_counter:
+                            product_counter[pt] = {}
+                        pid = prod["id"]
+                        product_counter[pt][pid] = product_counter[pt].get(pid, 0) + 1
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
         except sqlite3.OperationalError:
             # Table might not exist if SDP fetch hasn't run yet
             pass
+
+        # Resolve most common product per asset type
+        default_products = {}
+        for asset_type, counts in product_counter.items():
+            if counts:
+                best_pid = max(counts, key=counts.get)
+                default_products[asset_type] = {"id": best_pid}
+                logger.debug(f"Default product for {asset_type}: {best_pid} ({counts[best_pid]} assets)")
+
 
         # =====================================================================
         # PROCESS CONNECTWISE DEVICES
@@ -313,6 +337,9 @@ class SyncEngine:
                 )
             else:
                 # No match → CREATE action
+                # Inject default product if available for this asset type
+                if sdp_asset_type in default_products and "product" not in sdp_data:
+                    sdp_data["product"] = default_products[sdp_asset_type]
                 item = SyncItem(
                     cw_id=cw_id,
                     cw_name=device.get("friendlyName", ""),
