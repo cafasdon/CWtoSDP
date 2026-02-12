@@ -720,8 +720,10 @@ class ServiceDeskPlusClient:
                 # Attributes go under ci_attributes object
                 if "ci_attributes" not in ci_data[ci_type]:
                     ci_data[ci_type]["ci_attributes"] = {}
-                # Keep full field name as SDP expects it
-                ci_data[ci_type]["ci_attributes"][key] = value
+                # Strip the "ci_attributes_" prefix — SDP expects just "txt_os"
+                # not "ci_attributes_txt_os" inside the ci_attributes dict
+                attr_name = key[len("ci_attributes_"):]
+                ci_data[ci_type]["ci_attributes"][attr_name] = value
 
         # Build endpoint - pass raw dict, _make_request handles JSON serialization
         endpoint = f"/cmdb/{ci_type}"
@@ -816,8 +818,10 @@ class ServiceDeskPlusClient:
                 # Attributes go under ci_attributes object
                 if "ci_attributes" not in ci_data[ci_type]:
                     ci_data[ci_type]["ci_attributes"] = {}
-                # Keep full field name as SDP expects it
-                ci_data[ci_type]["ci_attributes"][key] = value
+                # Strip the "ci_attributes_" prefix — SDP expects just "txt_os"
+                # not "ci_attributes_txt_os" inside the ci_attributes dict
+                attr_name = key[len("ci_attributes_"):]
+                ci_data[ci_type]["ci_attributes"][attr_name] = value
 
         # Build endpoint - pass raw dict, _make_request handles JSON serialization
         endpoint = f"/cmdb/{ci_type}/{ci_id}"
