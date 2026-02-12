@@ -1903,6 +1903,9 @@ class SyncGUI:
             else:
                 self.progress_label.config(text=f"Complete: {success} created, {errors} errors")
 
+            # Restore X button functionality
+            self.progress_win.protocol("WM_DELETE_WINDOW", self.progress_win.destroy)
+
             # Add close button
             ttk.Button(self.progress_win, text="Close",
                        command=self.progress_win.destroy).pack(pady=10)
