@@ -559,9 +559,9 @@ class ServiceDeskPlusClient:
 
     # Fields known to be rejected by specific asset types.
     # If a field is listed here for an asset type, it will be stripped pre-send.
-    _UNSUPPORTED_FIELDS = {
-        "asset_virtual_machines": {"ip_address"},
-    }
+    # NOTE: ip_address and mac_address are NOT listed here — they are extracted
+    # and converted to network_adapters before the payload reaches the endpoint.
+    _UNSUPPORTED_FIELDS: Dict[str, set] = {}
 
     # Valid IPv4 regex: four octets 0-255 separated by dots
     _IPV4_REGEX = re.compile(

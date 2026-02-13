@@ -387,11 +387,11 @@ class TestValidatePayload(unittest.TestCase):
     # ── Asset-type field stripping ───────────────────────────────────────
 
     def test_strips_ip_for_vms(self):
-        """ip_address should be auto-stripped for asset_virtual_machines."""
+        """ip_address should be kept by _validate_payload — create/update converts it to network_adapters."""
         client = self._make_client()
         data = {"name": "VM-001", "ip_address": "10.0.0.5"}
         result = client._validate_payload(data, "asset_virtual_machines")
-        self.assertNotIn("ip_address", result)
+        self.assertEqual(result["ip_address"], "10.0.0.5")
         self.assertEqual(result["name"], "VM-001")
 
     def test_keeps_ip_for_workstations(self):
@@ -493,8 +493,8 @@ class TestValidatePayload(unittest.TestCase):
         result = client._validate_payload(data, "asset_virtual_machines", is_create=True)
         # _category stripped
         self.assertNotIn("_category", result)
-        # ip_address stripped (VM type)
-        self.assertNotIn("ip_address", result)
+        # ip_address kept (converted to network_adapters by create/update)
+        self.assertEqual(result["ip_address"], "10.0.0.5")
         # MAC trimmed to first
         self.assertEqual(result["mac_address"], "AA:BB:CC:DD:EE:FF")
         # Nested OS kept
