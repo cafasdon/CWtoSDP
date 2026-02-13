@@ -861,6 +861,15 @@ class ServiceDeskPlusClient:
         adapters = asset_data.pop("network_adapters", None)
         processors = asset_data.pop("processors", None)
 
+        # Extract nested dict fields — the generic /assets endpoint ignores these;
+        # they must be sent on the type-specific endpoint.
+        _NESTED_KEYS = ("operating_system", "computer_system", "memory")
+        nested_fields = {}
+        for nk in _NESTED_KEYS:
+            val = asset_data.pop(nk, None)
+            if val and isinstance(val, dict):
+                nested_fields[nk] = val
+
         device_name = data.get('name', 'unknown')
 
         # Step 1: Update core fields via generic /assets/{id}
@@ -905,7 +914,7 @@ class ServiceDeskPlusClient:
                 logger.error(f"Failed to update asset/{asset_id} '{device_name}': too many rejected fields")
                 return None
 
-        # Step 2: Update sub-resources via type-specific endpoint
+        # Step 2: Update sub-resources + nested fields via type-specific endpoint
         # Prefer full network_adapters from field mapper; fall back to flat ip/mac
         if adapters is None and (ip or mac):
             adapter = {"name": "NIC1"}
@@ -915,13 +924,16 @@ class ServiceDeskPlusClient:
                 adapter["mac_address"] = mac
             adapters = [adapter]
 
-        if (adapters or processors) and asset_type_endpoint:
+        has_type_data = adapters or processors or nested_fields
+        if has_type_data and asset_type_endpoint:
             singular_key = asset_type_endpoint.rstrip('s')
             sub_payload: Dict[str, Any] = {}
             if adapters:
                 sub_payload["network_adapters"] = adapters
             if processors:
                 sub_payload["processors"] = processors
+            # Include nested dict fields (OS, computer_system, memory)
+            sub_payload.update(nested_fields)
 
             type_payload = {singular_key: sub_payload}
             try:
@@ -933,6 +945,8 @@ class ServiceDeskPlusClient:
                     parts.append(f"{len(adapters)} NIC(s)")
                 if processors:
                     parts.append(f"{len(processors)} CPU(s)")
+                if nested_fields:
+                    parts.append(", ".join(nested_fields.keys()))
                 logger.info(f"Set sub-resources on {device_name}: {', '.join(parts)}")
                 if result is None:
                     result = sub_result
@@ -940,7 +954,7 @@ class ServiceDeskPlusClient:
                 logger.warning(
                     f"Updated {device_name} core fields but failed to set sub-resources: {e}"
                 )
-        elif (adapters or processors) and not asset_type_endpoint:
+        elif has_type_data and not asset_type_endpoint:
             logger.warning(
                 f"Cannot set sub-resources on {device_name}: asset_type_endpoint not provided"
             )
