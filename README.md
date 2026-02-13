@@ -273,14 +273,30 @@ After a dry run, the Results tab shows exactly what *would* happen with color-co
 
 ### ConnectWise → ServiceDesk Plus
 
-| CW Field                  | SDP Asset Field                                      |
-| ------------------------- | ---------------------------------------------------- |
-| `friendlyName`            | `name`                                               |
-| `system.serialNumber`     | `serial_number`                                      |
-| `os.product`              | `operating_system.os` (nested)                       |
-| `bios.manufacturer`       | `computer_system.system_manufacturer` (nested)       |
-| `networks[].ipv4`         | `ip_address`                                         |
-| `networks[].macAddress`   | `mac_address`                                        |
+| CW Field | SDP Asset Field | Notes |
+| --- | --- | --- |
+| `friendlyName` | `name` | Primary match key |
+| `system.serialNumber` | `serial_number` | Secondary match (non-VM only) |
+| `os.product` | `operating_system.os` | Nested field |
+| `os.buildNumber` | `operating_system.build_number` | Nested field |
+| `os.displayVersion` | `operating_system.service_pack` | Nested field |
+| `os.version` | `operating_system.version` | Nested field |
+| `system.model` | `computer_system.model` | Nested field |
+| `bios.manufacturer` | `computer_system.system_manufacturer` | Nested field |
+| `system.totalRam` | `memory.physical_memory` | Nested field (bytes) |
+| `networks[].ipv4` | `ip_address` + `network_adapters[].ip_address` | Flat + sub-resource |
+| `networks[].macAddress` | `mac_address` + `network_adapters[].mac_address` | Flat + sub-resource |
+| `networks[].description` | `network_adapters[].name` + `description` | Sub-resource array |
+| `networks[].subnetMask` | `network_adapters[].ipnet_mask` | Sub-resource array |
+| `networks[].defaultGateway` | `network_adapters[].default_gateway` | Sub-resource array |
+| `networks[].dhcp` | `network_adapters[].dhcp` | Sub-resource array |
+| `processors[].name` | `processors[].name` | Sub-resource array |
+| `processors[].cores` | `processors[].number_of_cores` | Sub-resource array |
+| `processors[].speed` | `processors[].speed` | Sub-resource array (MHz) |
+| `processors[].manufacturer` | `processors[].manufacturer` | Sub-resource array |
+
+> [!NOTE]
+> Nested fields (`operating_system`, `computer_system`, `memory`) are sent via the **type-specific endpoint** (e.g. `/asset_virtual_machines/{id}`) because the generic `/assets/{id}` endpoint ignores them.
 
 ### SDP Asset Types
 
@@ -562,6 +578,7 @@ You can also navigate there directly: press **Win + R**, paste `%USERPROFILE%\CW
 
 | Version | Date | Changes |
 | ------- | ---- | ------- |
+| 1.4.0 | 2026-02-13 | **Expanded field mapping**: OS version/build/SP, memory, model, processors, network adapters (sub-resources). Fixed nested field updates via type-specific endpoints. Fixed DHCP validation (`true`/`false`). Fixed stale GUI after refresh (SyncEngine connection reuse). Product auto-injection for new assets. |
 | 1.3.0 | 2026-02-12 | **CMDB → Assets API migration**: all sync operations now use the Assets API with nested field mapping (`operating_system`, `computer_system`). DB schema updated (`sdp_assets`). |
 | 1.2.0 | 2026-02-12 | Fixed SDP create/update failures (HTTP 2xx acceptance), fixed unclosable progress window, fixed first-run crash when credentials are missing, improved error logging with device names |
 | 1.1.0 | 2026-02-06 | Adaptive rate limiting with dynamic recovery, two-level dry run safety, CREATE + UPDATE sync, improved error handling |

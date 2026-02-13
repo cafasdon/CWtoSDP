@@ -1145,6 +1145,9 @@ class SyncGUI:
         2. Partial data (CW only or SDP only): Shows available data without matching
         3. Both available: Runs full sync preview with matching logic
         """
+        # Force a fresh DB snapshot so we see data written by refresh threads
+        self.engine.reconnect()
+
         # Check what data is available
         availability = self._check_data_availability()
         cw_available = availability['cw_available']

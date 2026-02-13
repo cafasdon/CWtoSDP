@@ -228,6 +228,18 @@ class SyncEngine:
         # Use Row factory for dict-like access to columns
         self.conn.row_factory = sqlite3.Row
 
+    def reconnect(self):
+        """
+        Close and reopen the database connection.
+
+        Forces a fresh read snapshot so build_sync_preview() sees any
+        data written by other connections (e.g. the SDP refresh thread).
+        """
+        db_path = self.conn.execute("PRAGMA database_list").fetchone()[2]
+        self.conn.close()
+        self.conn = sqlite3.connect(db_path)
+        self.conn.row_factory = sqlite3.Row
+
     def close(self):
         """Close the database connection."""
         self.conn.close()
