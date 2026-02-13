@@ -556,6 +556,12 @@ class ServiceDeskPlusClient:
     # ASSET WRITE OPERATIONS (CREATE / UPDATE / DELETE)
     # =========================================================================
 
+    # Fields that only exist on the generic /assets/{id} endpoint, NOT on
+    # type-specific endpoints (/asset_workstations, /asset_virtual_machines, etc.).
+    # These are extracted before the type-specific POST and applied via a
+    # follow-up PUT to /assets/{created_id}.
+    _GENERIC_ASSET_FIELDS = {"ip_address", "mac_address"}
+
     # Fields known to be rejected by specific asset types.
     # If a field is listed here for an asset type, it will be stripped pre-send.
     _UNSUPPORTED_FIELDS = {
@@ -608,6 +614,7 @@ class ServiceDeskPlusClient:
         if ip:
             if not self._IPV4_REGEX.match(ip):
                 logger.warning(
+
                     f"Stripped invalid ip_address '{ip}' — not valid IPv4"
                 )
                 del data["ip_address"]
@@ -713,6 +720,11 @@ class ServiceDeskPlusClient:
         """
         Create a new Asset in ServiceDesk Plus.
 
+        Two-step process:
+        1. POST to the type-specific endpoint (e.g. /asset_workstations) for core fields
+        2. PUT to /assets/{id} for network fields (ip_address, mac_address) which only
+           exist on the generic assets endpoint
+
         SAFETY: This operation is BLOCKED if dry_run=True (default).
 
         Args:
@@ -747,6 +759,13 @@ class ServiceDeskPlusClient:
         # Validate and sanitize before sending
         self._validate_payload(asset_data, asset_type_endpoint, is_create=True)
 
+        # Extract generic-only fields (ip_address, mac_address) — these are NOT
+        # supported on type-specific endpoints and must be set via PUT /assets/{id}
+        generic_fields = {}
+        for field in list(self._GENERIC_ASSET_FIELDS):
+            if field in asset_data:
+                generic_fields[field] = asset_data.pop(field)
+
         # Wrap in the singular form key (e.g. asset_virtual_machine for asset_virtual_machines)
         singular_key = asset_type_endpoint.rstrip('s')
         payload = {singular_key: asset_data}
@@ -756,12 +775,13 @@ class ServiceDeskPlusClient:
 
         # Retry loop: auto-strip fields rejected by SDP as EXTRA_KEY_FOUND_IN_JSON
         max_field_retries = 5
+        result = None
         for field_attempt in range(max_field_retries + 1):
             try:
                 logger.debug(f"CREATE payload for {asset_type_endpoint}: {json.dumps(payload, indent=2)}")
                 result = self._make_request("POST", endpoint, data=payload)
                 logger.info(f"Created {asset_type_endpoint}: {device_name}")
-                return result
+                break
             except ServiceDeskPlusClientError as e:
                 error_str = str(e)
                 extra_fields = self._parse_extra_key_fields(error_str)
@@ -779,8 +799,35 @@ class ServiceDeskPlusClient:
                 logger.error(f"Failed to create {asset_type_endpoint} '{device_name}': {e}")
                 return None
 
-        logger.error(f"Failed to create {asset_type_endpoint} '{device_name}': too many rejected fields")
-        return None
+        if result is None:
+            logger.error(f"Failed to create {asset_type_endpoint} '{device_name}': too many rejected fields")
+            return None
+
+        # Step 2: Set generic-only fields (ip_address, mac_address) via PUT /assets/{id}
+        if generic_fields:
+            # Extract the created asset ID from the response
+            type_key = singular_key
+            created_asset = result.get(type_key, result.get("asset", {}))
+            created_id = created_asset.get("id") if isinstance(created_asset, dict) else None
+
+            if created_id:
+                try:
+                    update_payload = {"asset": generic_fields}
+                    self._make_request("PUT", f"/assets/{created_id}", data=update_payload)
+                    logger.info(
+                        f"Set network fields on {device_name}: "
+                        f"{', '.join(f'{k}={v}' for k, v in generic_fields.items())}"
+                    )
+                except ServiceDeskPlusClientError as e:
+                    logger.warning(
+                        f"Created {device_name} but failed to set network fields: {e}"
+                    )
+            else:
+                logger.warning(
+                    f"Created {device_name} but could not extract ID for network field update"
+                )
+
+        return result
 
     def update_asset(self, asset_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
