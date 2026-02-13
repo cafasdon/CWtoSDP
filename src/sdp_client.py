@@ -558,13 +558,17 @@ class ServiceDeskPlusClient:
     @staticmethod
     def _parse_extra_key_fields(error_message: str) -> list:
         """
-        Parse an SDP error response to find fields rejected as EXTRA_KEY_FOUND_IN_JSON.
+        Parse an SDP error response to find fields that should be stripped and retried.
+
+        Handles two error types:
+        1. EXTRA_KEY_FOUND_IN_JSON — field not supported on this asset type
+        2. Validation failures (status 4014, type "failed") — field value rejected
 
         Args:
             error_message: The full error string from ServiceDeskPlusClientError
 
         Returns:
-            List of rejected field names, or empty list if not an EXTRA_KEY issue.
+            List of rejected field names, or empty list if not a field-level issue.
         """
         extra_fields = []
         try:
@@ -576,10 +580,15 @@ class ServiceDeskPlusClient:
             messages = error_json.get("response_status", {}).get("messages", [])
 
             for msg in messages:
+                field = msg.get("field")
+                if not field:
+                    continue
+                # Case 1: field not recognized by this asset type
                 if msg.get("message") == "EXTRA_KEY_FOUND_IN_JSON":
-                    field = msg.get("field")
-                    if field:
-                        extra_fields.append(field)
+                    extra_fields.append(field)
+                # Case 2: field value failed validation (e.g. ip_address format)
+                elif msg.get("type") == "failed" and msg.get("status_code") == 4014:
+                    extra_fields.append(field)
 
         except (json.JSONDecodeError, KeyError, TypeError):
             pass
