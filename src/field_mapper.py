@@ -475,6 +475,7 @@ class FieldMapper:
         Filters out:
         - 0.0.0.0 (no IP assigned)
         - 127.x.x.x (loopback addresses)
+        - 169.254.x.x (APIPA / link-local, no DHCP lease)
 
         Args:
             networks: List of network adapter dictionaries
@@ -487,29 +488,33 @@ class FieldMapper:
 
         for net in networks:
             ip = net.get('ipv4', '')
-            # Skip invalid/loopback addresses
-            if ip and ip != '0.0.0.0' and not ip.startswith('127.'):
+            # Skip invalid/loopback/link-local addresses
+            if ip and ip != '0.0.0.0' and not ip.startswith('127.') and not ip.startswith('169.254.'):
                 return ip
 
         return None
 
     def _extract_mac(self, networks: list) -> Optional[str]:
         """
-        Extract MAC addresses from networks array.
+        Extract the first valid MAC address from networks array.
 
-        Returns all MAC addresses as a comma-separated string.
+        Returns only the first MAC address. SDP does not accept
+        comma-separated multiple MACs — sending multiple causes
+        validation failures.
 
         Args:
             networks: List of network adapter dictionaries
 
         Returns:
-            Comma-separated MAC addresses, or None if none found
+            First MAC address string, or None if none found
         """
         if not networks:
             return None
 
-        # Collect all MAC addresses
-        macs = [net.get('macAddress') for net in networks if net.get('macAddress')]
+        for net in networks:
+            mac = net.get('macAddress')
+            if mac:
+                return mac
 
-        return ', '.join(macs) if macs else None
+        return None
 

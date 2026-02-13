@@ -51,6 +51,7 @@ Usage Example:
 """
 
 import json
+import re
 import time
 import random
 import threading
@@ -555,6 +556,119 @@ class ServiceDeskPlusClient:
     # ASSET WRITE OPERATIONS (CREATE / UPDATE / DELETE)
     # =========================================================================
 
+    # Fields known to be rejected by specific asset types.
+    # If a field is listed here for an asset type, it will be stripped pre-send.
+    _UNSUPPORTED_FIELDS = {
+        "asset_virtual_machines": {"ip_address"},
+    }
+
+    # Valid IPv4 regex: four octets 0-255 separated by dots
+    _IPV4_REGEX = re.compile(
+        r"^(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)$"
+    )
+
+    # Valid MAC regex: six hex pairs separated by colons or hyphens
+    _MAC_REGEX = re.compile(
+        r"^([0-9A-Fa-f]{2}[:\-]){5}[0-9A-Fa-f]{2}$"
+    )
+
+    def _validate_payload(
+        self,
+        data: Dict[str, Any],
+        asset_type_endpoint: str,
+        is_create: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Validate and sanitize a payload before sending to SDP.
+
+        Performs the following checks:
+        1. Strips internal keys (_category, etc.)
+        2. Validates ip_address format (must be valid, non-APIPA IPv4)
+        3. Strips fields known to be unsupported for the asset type
+        4. Validates mac_address format
+        5. Validates nested object structures (operating_system, computer_system)
+        6. Warns if product is missing on CREATE
+
+        Args:
+            data: The payload dictionary to validate (modified in-place)
+            asset_type_endpoint: The target SDP asset type (e.g. "asset_virtual_machines")
+            is_create: True if this is a CREATE operation
+
+        Returns:
+            The sanitized payload dictionary
+        """
+        # 1. Strip internal keys
+        internal_keys = [k for k in data if k.startswith("_")]
+        for key in internal_keys:
+            del data[key]
+            logger.debug(f"Stripped internal key '{key}' from payload")
+
+        # 2. Validate ip_address format
+        ip = data.get("ip_address")
+        if ip:
+            if not self._IPV4_REGEX.match(ip):
+                logger.warning(
+                    f"Stripped invalid ip_address '{ip}' — not valid IPv4"
+                )
+                del data["ip_address"]
+            elif ip.startswith("169.254."):
+                logger.warning(
+                    f"Stripped APIPA ip_address '{ip}' — link-local, no DHCP lease"
+                )
+                del data["ip_address"]
+
+        # 3. Strip fields unsupported by this asset type
+        unsupported = self._UNSUPPORTED_FIELDS.get(asset_type_endpoint, set())
+        for field in unsupported:
+            if field in data:
+                logger.info(
+                    f"Stripped '{field}' — not supported on {asset_type_endpoint}"
+                )
+                del data[field]
+
+        # 4. Validate mac_address format
+        mac = data.get("mac_address")
+        if mac:
+            # If somehow comma-separated, take only the first
+            if "," in mac:
+                mac = mac.split(",")[0].strip()
+                data["mac_address"] = mac
+                logger.debug("Trimmed mac_address to first entry")
+            if not self._MAC_REGEX.match(mac):
+                logger.warning(
+                    f"Stripped invalid mac_address '{mac}' — not valid MAC format"
+                )
+                del data["mac_address"]
+
+        # 5. Validate nested object structures
+        for nested_key, expected_child in [
+            ("operating_system", "os"),
+            ("computer_system", "system_manufacturer"),
+        ]:
+            val = data.get(nested_key)
+            if val is not None:
+                if not isinstance(val, dict):
+                    # Wrong shape — wrap it if it's a plain string
+                    if isinstance(val, str) and val:
+                        data[nested_key] = {expected_child: val}
+                        logger.warning(
+                            f"Wrapped plain string '{nested_key}' in nested dict"
+                        )
+                    else:
+                        del data[nested_key]
+                        logger.warning(
+                            f"Stripped invalid '{nested_key}' — expected dict, got {type(val).__name__}"
+                        )
+
+        # 6. Warn if product missing on CREATE
+        if is_create and "product" not in data:
+            logger.warning(
+                f"CREATE payload missing 'product' field — "
+                f"SDP may reject this. Ensure SDP data is cached (Refresh SDP)."
+            )
+
+        return data
+
     @staticmethod
     def _parse_extra_key_fields(error_message: str) -> list:
         """
@@ -630,6 +744,9 @@ class ServiceDeskPlusClient:
                 continue
             asset_data[key] = value
 
+        # Validate and sanitize before sending
+        self._validate_payload(asset_data, asset_type_endpoint, is_create=True)
+
         # Wrap in the singular form key (e.g. asset_virtual_machine for asset_virtual_machines)
         singular_key = asset_type_endpoint.rstrip('s')
         payload = {singular_key: asset_data}
@@ -692,6 +809,9 @@ class ServiceDeskPlusClient:
             if value is None or value == "":
                 continue
             asset_data[key] = value
+
+        # Validate and sanitize before sending
+        self._validate_payload(asset_data, "assets", is_create=False)
 
         payload = {"asset": asset_data}
         endpoint = f"/assets/{asset_id}"
