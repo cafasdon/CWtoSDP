@@ -1817,7 +1817,7 @@ class SyncGUI:
                         result_entry["status"] = "failed"
                         result_entry["message"] = "Missing SDP ID for update"
                     else:
-                        result = sdp.update_asset(item.sdp_id, item.fields_to_sync)
+                        result = sdp.update_asset(item.sdp_id, item.fields_to_sync, item.sdp_ci_type)
                         if result:
                             success_count += 1
                             if is_dry_run:

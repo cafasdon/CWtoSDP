@@ -556,11 +556,6 @@ class ServiceDeskPlusClient:
     # ASSET WRITE OPERATIONS (CREATE / UPDATE / DELETE)
     # =========================================================================
 
-    # Fields that only exist on the generic /assets/{id} endpoint, NOT on
-    # type-specific endpoints (/asset_workstations, /asset_virtual_machines, etc.).
-    # These are extracted before the type-specific POST and applied via a
-    # follow-up PUT to /assets/{created_id}.
-    _GENERIC_ASSET_FIELDS = {"ip_address", "mac_address"}
 
     # Fields known to be rejected by specific asset types.
     # If a field is listed here for an asset type, it will be stripped pre-send.
@@ -720,10 +715,9 @@ class ServiceDeskPlusClient:
         """
         Create a new Asset in ServiceDesk Plus.
 
-        Two-step process:
-        1. POST to the type-specific endpoint (e.g. /asset_workstations) for core fields
-        2. PUT to /assets/{id} for network fields (ip_address, mac_address) which only
-           exist on the generic assets endpoint
+        ip_address and mac_address are read-only on the generic /assets endpoint.
+        They must be sent as a network_adapters array on the type-specific endpoint
+        (e.g. /asset_workstations, /asset_virtual_machines).
 
         SAFETY: This operation is BLOCKED if dry_run=True (default).
 
@@ -735,8 +729,8 @@ class ServiceDeskPlusClient:
             data: Dictionary of flat field values. Common fields:
                     - "name": Asset name (required)
                     - "serial_number": Serial number
-                    - "ip_address": IP address
-                    - "mac_address": MAC address
+                    - "ip_address": IP address (→ converted to network_adapters)
+                    - "mac_address": MAC address (→ converted to network_adapters)
                     - "os": Operating system
                     - "manufacturer": Manufacturer
 
@@ -759,12 +753,19 @@ class ServiceDeskPlusClient:
         # Validate and sanitize before sending
         self._validate_payload(asset_data, asset_type_endpoint, is_create=True)
 
-        # Extract generic-only fields (ip_address, mac_address) — these are NOT
-        # supported on type-specific endpoints and must be set via PUT /assets/{id}
-        generic_fields = {}
-        for field in list(self._GENERIC_ASSET_FIELDS):
-            if field in asset_data:
-                generic_fields[field] = asset_data.pop(field)
+        # Convert flat ip_address/mac_address into a network_adapters array.
+        # SDP's generic /assets endpoint treats ip_address & mac_address as read-only;
+        # they are derived from the network_adapters sub-resource on the type endpoint.
+        ip = asset_data.pop("ip_address", None)
+        mac = asset_data.pop("mac_address", None)
+        if ip or mac:
+            adapter = {"name": "NIC1"}
+            if ip:
+                adapter["ip_address"] = ip
+            if mac:
+                adapter["mac_address"] = mac
+            asset_data["network_adapters"] = [adapter]
+            logger.debug(f"Converted ip/mac to network_adapters: {adapter}")
 
         # Wrap in the singular form key (e.g. asset_virtual_machine for asset_virtual_machines)
         singular_key = asset_type_endpoint.rstrip('s')
@@ -775,13 +776,12 @@ class ServiceDeskPlusClient:
 
         # Retry loop: auto-strip fields rejected by SDP as EXTRA_KEY_FOUND_IN_JSON
         max_field_retries = 5
-        result = None
         for field_attempt in range(max_field_retries + 1):
             try:
                 logger.debug(f"CREATE payload for {asset_type_endpoint}: {json.dumps(payload, indent=2)}")
                 result = self._make_request("POST", endpoint, data=payload)
                 logger.info(f"Created {asset_type_endpoint}: {device_name}")
-                break
+                return result
             except ServiceDeskPlusClientError as e:
                 error_str = str(e)
                 extra_fields = self._parse_extra_key_fields(error_str)
@@ -799,47 +799,30 @@ class ServiceDeskPlusClient:
                 logger.error(f"Failed to create {asset_type_endpoint} '{device_name}': {e}")
                 return None
 
-        if result is None:
-            logger.error(f"Failed to create {asset_type_endpoint} '{device_name}': too many rejected fields")
-            return None
+        logger.error(f"Failed to create {asset_type_endpoint} '{device_name}': too many rejected fields")
+        return None
 
-        # Step 2: Set generic-only fields (ip_address, mac_address) via PUT /assets/{id}
-        if generic_fields:
-            # Extract the created asset ID from the response
-            type_key = singular_key
-            created_asset = result.get(type_key, result.get("asset", {}))
-            created_id = created_asset.get("id") if isinstance(created_asset, dict) else None
-
-            if created_id:
-                try:
-                    update_payload = {"asset": generic_fields}
-                    self._make_request("PUT", f"/assets/{created_id}", data=update_payload)
-                    logger.info(
-                        f"Set network fields on {device_name}: "
-                        f"{', '.join(f'{k}={v}' for k, v in generic_fields.items())}"
-                    )
-                except ServiceDeskPlusClientError as e:
-                    logger.warning(
-                        f"Created {device_name} but failed to set network fields: {e}"
-                    )
-            else:
-                logger.warning(
-                    f"Created {device_name} but could not extract ID for network field update"
-                )
-
-        return result
-
-    def update_asset(self, asset_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def update_asset(
+        self,
+        asset_id: str,
+        data: Dict[str, Any],
+        asset_type_endpoint: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         """
         Update an existing Asset in ServiceDesk Plus.
 
-        Uses the generic /assets/{id} endpoint which works for all asset types.
+        Uses the generic /assets/{id} endpoint for core fields. If ip_address or
+        mac_address are in the data AND asset_type_endpoint is provided, a follow-up
+        PUT to the type-specific endpoint sets network_adapters (since ip/mac are
+        read-only on the generic endpoint).
 
         SAFETY: This operation is BLOCKED if dry_run=True (default).
 
         Args:
             asset_id: The SDP asset ID to update
             data: Dictionary of flat field values to update
+            asset_type_endpoint: Optional type endpoint (e.g. "asset_workstations")
+                    for network adapter updates
 
         Returns:
             Updated asset data dictionary if successful
@@ -858,47 +841,87 @@ class ServiceDeskPlusClient:
             asset_data[key] = value
 
         # Validate and sanitize before sending
-        self._validate_payload(asset_data, "assets", is_create=False)
+        self._validate_payload(asset_data, asset_type_endpoint or "assets", is_create=False)
 
-        payload = {"asset": asset_data}
-        endpoint = f"/assets/{asset_id}"
+        # Extract ip/mac for network_adapters (read-only on generic endpoint)
+        ip = asset_data.pop("ip_address", None)
+        mac = asset_data.pop("mac_address", None)
+
         device_name = data.get('name', 'unknown')
 
-        # Retry loop for EXTRA_KEY_FOUND_IN_JSON
-        max_field_retries = 5
-        for field_attempt in range(max_field_retries + 1):
-            try:
-                logger.debug(f"UPDATE payload for asset/{asset_id}: {json.dumps(payload, indent=2)}")
-                result = self._make_request("PUT", endpoint, data=payload)
-                logger.info(f"Updated asset/{asset_id}: {device_name}")
-                return result
-            except ServiceDeskPlusClientError as e:
-                error_str = str(e)
+        # Step 1: Update core fields via generic /assets/{id}
+        result = None
+        if asset_data:
+            payload = {"asset": asset_data}
+            endpoint = f"/assets/{asset_id}"
 
-                if "404" in error_str:
-                    logger.error(
-                        f"Cannot update asset/{asset_id} '{device_name}': "
-                        f"Asset not found in SDP"
-                    )
+            max_field_retries = 5
+            for field_attempt in range(max_field_retries + 1):
+                try:
+                    logger.debug(f"UPDATE payload for asset/{asset_id}: {json.dumps(payload, indent=2)}")
+                    result = self._make_request("PUT", endpoint, data=payload)
+                    logger.info(f"Updated asset/{asset_id}: {device_name}")
+                    break
+                except ServiceDeskPlusClientError as e:
+                    error_str = str(e)
+
+                    if "404" in error_str:
+                        logger.error(
+                            f"Cannot update asset/{asset_id} '{device_name}': "
+                            f"Asset not found in SDP"
+                        )
+                        return None
+
+                    extra_fields = self._parse_extra_key_fields(error_str)
+
+                    if extra_fields and field_attempt < max_field_retries:
+                        for field in extra_fields:
+                            if field in asset_data:
+                                del asset_data[field]
+                                logger.warning(
+                                    f"Field '{field}' not supported on assets, "
+                                    f"removed and retrying ({device_name})"
+                                )
+                        continue
+
+                    logger.error(f"Failed to update asset/{asset_id} '{device_name}': {e}")
                     return None
 
-                extra_fields = self._parse_extra_key_fields(error_str)
-
-                if extra_fields and field_attempt < max_field_retries:
-                    for field in extra_fields:
-                        if field in asset_data:
-                            del asset_data[field]
-                            logger.warning(
-                                f"Field '{field}' not supported on assets, "
-                                f"removed and retrying ({device_name})"
-                            )
-                    continue
-
-                logger.error(f"Failed to update asset/{asset_id} '{device_name}': {e}")
+            if result is None:
+                logger.error(f"Failed to update asset/{asset_id} '{device_name}': too many rejected fields")
                 return None
 
-        logger.error(f"Failed to update asset/{asset_id} '{device_name}': too many rejected fields")
-        return None
+        # Step 2: Update network adapters via type-specific endpoint
+        if (ip or mac) and asset_type_endpoint:
+            adapter = {"name": "NIC1"}
+            if ip:
+                adapter["ip_address"] = ip
+            if mac:
+                adapter["mac_address"] = mac
+
+            singular_key = asset_type_endpoint.rstrip('s')
+            net_payload = {singular_key: {"network_adapters": [adapter]}}
+            try:
+                net_result = self._make_request(
+                    "PUT", f"/{asset_type_endpoint}/{asset_id}", data=net_payload
+                )
+                logger.info(
+                    f"Set network adapters on {device_name}: "
+                    f"{', '.join(f'{k}={v}' for k, v in adapter.items() if k != 'name')}"
+                )
+                # If no core fields were updated, return the network result
+                if result is None:
+                    result = net_result
+            except ServiceDeskPlusClientError as e:
+                logger.warning(
+                    f"Updated {device_name} core fields but failed to set network adapters: {e}"
+                )
+        elif (ip or mac) and not asset_type_endpoint:
+            logger.warning(
+                f"Cannot set IP/MAC on {device_name}: asset_type_endpoint not provided"
+            )
+
+        return result
 
     def delete_asset(self, asset_id: str) -> bool:
         """
