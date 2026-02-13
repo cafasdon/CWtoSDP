@@ -627,7 +627,7 @@ class FieldMapper:
                 adapter['ipnet_mask'] = mask
             dhcp = net.get('dhcpEnabled')
             if dhcp is not None:
-                adapter['dhcp'] = str(dhcp)
+                adapter['dhcp'] = 'true' if dhcp else 'false'
 
             adapters.append(adapter)
 
