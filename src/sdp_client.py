@@ -753,19 +753,29 @@ class ServiceDeskPlusClient:
         # Validate and sanitize before sending
         self._validate_payload(asset_data, asset_type_endpoint, is_create=True)
 
-        # Convert flat ip_address/mac_address into a network_adapters array.
-        # SDP's generic /assets endpoint treats ip_address & mac_address as read-only;
-        # they are derived from the network_adapters sub-resource on the type endpoint.
-        ip = asset_data.pop("ip_address", None)
-        mac = asset_data.pop("mac_address", None)
-        if ip or mac:
-            adapter = {"name": "NIC1"}
-            if ip:
-                adapter["ip_address"] = ip
-            if mac:
-                adapter["mac_address"] = mac
-            asset_data["network_adapters"] = [adapter]
-            logger.debug(f"Converted ip/mac to network_adapters: {adapter}")
+        # ── Sub-resource arrays ────────────────────────────────────────────
+        # network_adapters, processors, etc. must be sent on the type-specific
+        # endpoint.  The field mapper may provide a full array OR just flat
+        # ip_address/mac_address (backward compat).
+
+        # Prefer full network_adapters from field mapper
+        if "network_adapters" not in asset_data:
+            # Fallback: convert flat ip_address/mac_address
+            ip = asset_data.pop("ip_address", None)
+            mac = asset_data.pop("mac_address", None)
+            if ip or mac:
+                adapter = {"name": "NIC1"}
+                if ip:
+                    adapter["ip_address"] = ip
+                if mac:
+                    adapter["mac_address"] = mac
+                asset_data["network_adapters"] = [adapter]
+                logger.debug(f"Converted ip/mac to network_adapters: {adapter}")
+        else:
+            # Full array provided — still strip flat ip/mac to avoid confusion
+            asset_data.pop("ip_address", None)
+            asset_data.pop("mac_address", None)
+            logger.debug(f"Using {len(asset_data['network_adapters'])} network_adapters from field mapper")
 
         # Wrap in the singular form key (e.g. asset_virtual_machine for asset_virtual_machines)
         singular_key = asset_type_endpoint.rstrip('s')
@@ -847,6 +857,10 @@ class ServiceDeskPlusClient:
         ip = asset_data.pop("ip_address", None)
         mac = asset_data.pop("mac_address", None)
 
+        # Extract sub-resource arrays BEFORE the generic PUT (not accepted there)
+        adapters = asset_data.pop("network_adapters", None)
+        processors = asset_data.pop("processors", None)
+
         device_name = data.get('name', 'unknown')
 
         # Step 1: Update core fields via generic /assets/{id}
@@ -891,34 +905,44 @@ class ServiceDeskPlusClient:
                 logger.error(f"Failed to update asset/{asset_id} '{device_name}': too many rejected fields")
                 return None
 
-        # Step 2: Update network adapters via type-specific endpoint
-        if (ip or mac) and asset_type_endpoint:
+        # Step 2: Update sub-resources via type-specific endpoint
+        # Prefer full network_adapters from field mapper; fall back to flat ip/mac
+        if adapters is None and (ip or mac):
             adapter = {"name": "NIC1"}
             if ip:
                 adapter["ip_address"] = ip
             if mac:
                 adapter["mac_address"] = mac
+            adapters = [adapter]
 
+        if (adapters or processors) and asset_type_endpoint:
             singular_key = asset_type_endpoint.rstrip('s')
-            net_payload = {singular_key: {"network_adapters": [adapter]}}
+            sub_payload: Dict[str, Any] = {}
+            if adapters:
+                sub_payload["network_adapters"] = adapters
+            if processors:
+                sub_payload["processors"] = processors
+
+            type_payload = {singular_key: sub_payload}
             try:
-                net_result = self._make_request(
-                    "PUT", f"/{asset_type_endpoint}/{asset_id}", data=net_payload
+                sub_result = self._make_request(
+                    "PUT", f"/{asset_type_endpoint}/{asset_id}", data=type_payload
                 )
-                logger.info(
-                    f"Set network adapters on {device_name}: "
-                    f"{', '.join(f'{k}={v}' for k, v in adapter.items() if k != 'name')}"
-                )
-                # If no core fields were updated, return the network result
+                parts = []
+                if adapters:
+                    parts.append(f"{len(adapters)} NIC(s)")
+                if processors:
+                    parts.append(f"{len(processors)} CPU(s)")
+                logger.info(f"Set sub-resources on {device_name}: {', '.join(parts)}")
                 if result is None:
-                    result = net_result
+                    result = sub_result
             except ServiceDeskPlusClientError as e:
                 logger.warning(
-                    f"Updated {device_name} core fields but failed to set network adapters: {e}"
+                    f"Updated {device_name} core fields but failed to set sub-resources: {e}"
                 )
-        elif (ip or mac) and not asset_type_endpoint:
+        elif (adapters or processors) and not asset_type_endpoint:
             logger.warning(
-                f"Cannot set IP/MAC on {device_name}: asset_type_endpoint not provided"
+                f"Cannot set sub-resources on {device_name}: asset_type_endpoint not provided"
             )
 
         return result

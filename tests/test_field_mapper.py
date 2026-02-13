@@ -136,9 +136,18 @@ class TestFieldMapper(unittest.TestCase):
         self.assertEqual(data["name"], "LAPTOP-001")
         self.assertEqual(data["serial_number"], "ABC123")
         self.assertEqual(data["operating_system"], {"os": "Windows 11 Pro"})
-        self.assertEqual(data["computer_system"], {"system_manufacturer": "Lenovo"})  # Normalized
+        # computer_system now includes model and service_tag from system.*
+        self.assertEqual(data["computer_system"], {
+            "system_manufacturer": "Lenovo",  # Normalized from LENOVO
+            "model": "ThinkPad X1 Carbon",
+            "service_tag": "ABC123",
+        })
         self.assertEqual(data["ip_address"], "192.168.1.10")
         self.assertIn("AA:BB:CC:DD:EE:FF", data["mac_address"])
+        # Sub-resource: network_adapters built from CW networks
+        self.assertIn("network_adapters", data)
+        self.assertEqual(len(data["network_adapters"]), 2)
+        self.assertEqual(data["network_adapters"][0]["ip_address"], "192.168.1.10")
 
     def test_category_included_in_result(self):
         mapper = FieldMapper(self._make_device())
@@ -317,6 +326,86 @@ class TestFieldMapper(unittest.TestCase):
         data = mapper.get_sdp_data()
         self.assertNotIn("ip_address", data)
         self.assertNotIn("mac_address", data)
+
+    # ── New Sub-Resource Extractors ──────────────────────────────────────
+
+    def test_extract_total_ram(self):
+        """Should sum physicalMemory sizeBytes into a string."""
+        device = self._make_device(physicalMemory=[
+            {"sizeBytes": 8589934592},
+            {"sizeBytes": 8589934592},
+        ])
+        mapper = FieldMapper(device)
+        data = mapper.get_sdp_data()
+        self.assertEqual(data["memory"], {"physical_memory": "17179869184"})
+
+    def test_extract_total_ram_empty(self):
+        """No physicalMemory should not produce a memory key."""
+        device = self._make_device(physicalMemory=[])
+        mapper = FieldMapper(device)
+        data = mapper.get_sdp_data()
+        self.assertNotIn("memory", data)
+
+    def test_extract_network_adapters(self):
+        """Should build adapters with real names from CW data."""
+        device = self._make_device(networks=[
+            {"ipv4": "10.0.0.5", "macAddress": "AA:BB:CC:DD:EE:FF",
+             "product": "Realtek PCIe GbE"},
+        ])
+        mapper = FieldMapper(device)
+        data = mapper.get_sdp_data()
+        adapters = data["network_adapters"]
+        self.assertEqual(len(adapters), 1)
+        self.assertEqual(adapters[0]["name"], "Realtek PCIe GbE")
+        self.assertEqual(adapters[0]["ip_address"], "10.0.0.5")
+        self.assertEqual(adapters[0]["mac_address"], "AA:BB:CC:DD:EE:FF")
+
+    def test_extract_network_adapters_skips_unusable(self):
+        """Adapters without IP or MAC are skipped."""
+        device = self._make_device(networks=[
+            {"ipv4": "0.0.0.0", "macAddress": ""},
+            {"ipv4": "10.1.1.1", "macAddress": "11:22:33:44:55:66"},
+        ])
+        mapper = FieldMapper(device)
+        adapters = mapper._extract_network_adapters()
+        self.assertEqual(len(adapters), 1)
+        self.assertEqual(adapters[0]["ip_address"], "10.1.1.1")
+
+    def test_extract_processors(self):
+        """Should extract processor info from CW data."""
+        device = self._make_device(processors=[
+            {"product": "Intel Core i7-1165G7", "numberOfCores": 4,
+             "clockSpeedMhz": 2800, "manufacturer": "GenuineIntel"},
+        ])
+        mapper = FieldMapper(device)
+        data = mapper.get_sdp_data()
+        self.assertIn("processors", data)
+        self.assertEqual(len(data["processors"]), 1)
+        self.assertEqual(data["processors"][0]["name"], "Intel Core i7-1165G7")
+        self.assertEqual(data["processors"][0]["number_of_cores"], "4")
+        self.assertEqual(data["processors"][0]["speed"], "2800")
+
+    def test_extract_processors_empty(self):
+        """No processors should not produce a processors key."""
+        device = self._make_device(processors=[])
+        mapper = FieldMapper(device)
+        data = mapper.get_sdp_data()
+        self.assertNotIn("processors", data)
+
+    def test_os_version_fields(self):
+        """Should map OS version, service_pack, and build_number."""
+        device = self._make_device(os={
+            "product": "Windows 11 Pro",
+            "version": "10.0.26100",
+            "displayVersion": "24H2",
+            "buildNumber": "26100",
+        })
+        mapper = FieldMapper(device)
+        data = mapper.get_sdp_data()
+        self.assertEqual(data["operating_system"]["os"], "Windows 11 Pro")
+        self.assertEqual(data["operating_system"]["version"], "10.0.26100")
+        self.assertEqual(data["operating_system"]["service_pack"], "24H2")
+        self.assertEqual(data["operating_system"]["build_number"], "26100")
 
 
 if __name__ == "__main__":

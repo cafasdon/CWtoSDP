@@ -296,14 +296,36 @@ class FieldMapper:
     # The SDP Assets API requires certain fields to be wrapped in nested objects.
     # Format: 'sdp_parent_key': {'sdp_child_key': ('cw_path', 'transform')}
     NESTED_FIELD_MAP = {
-        # Operating System info — SDP expects: {"operating_system": {"os": "..."}}
+        # Operating System info — SDP expects:
+        # {"operating_system": {"os": "...", "version": "...", ...}}
         'operating_system': {
             'os': ('os.product', None),
+            'version': ('os.version', None),
+            'service_pack': ('os.displayVersion', None),
+            'build_number': ('os.buildNumber', None),
         },
-        # Computer System info — SDP expects: {"computer_system": {"system_manufacturer": "..."}}
+        # Computer System info — SDP expects:
+        # {"computer_system": {"system_manufacturer": "...", "model": "...", ...}}
         'computer_system': {
             'system_manufacturer': ('bios.manufacturer', '_clean_manufacturer'),
+            'model': ('system.model', None),
+            'service_tag': ('system.serialNumber', '_clean_serial'),
         },
+        # Memory totals — SDP expects: {"memory": {"physical_memory": "..."}}
+        'memory': {
+            'physical_memory': ('physicalMemory', '_extract_total_ram'),
+        },
+    }
+
+    # =========================================================================
+    # SUB-RESOURCE ARRAY MAPPING
+    # =========================================================================
+    # These produce lists-of-dicts that must be sent on the type-specific
+    # SDP endpoint (like network_adapters).  Each entry is:
+    #   'sdp_array_key': 'extractor_method_name'
+    SUB_RESOURCE_MAP = {
+        'network_adapters': '_extract_network_adapters',
+        'processors': '_extract_processors',
     }
 
     # =========================================================================
@@ -378,6 +400,13 @@ class FieldMapper:
             # Only include the parent if at least one child has a value
             if nested:
                 result[parent_key] = nested
+
+        # Process sub-resource arrays (sent on type-specific endpoints)
+        for sdp_key, extractor in self.SUB_RESOURCE_MAP.items():
+            if hasattr(self, extractor):
+                items = getattr(self, extractor)()
+                if items:
+                    result[sdp_key] = items
 
         return result
 
@@ -517,4 +546,126 @@ class FieldMapper:
                 return mac
 
         return None
+
+    # =========================================================================
+    # SUB-RESOURCE EXTRACTORS
+    # =========================================================================
+
+    def _is_valid_ip(self, ip: str) -> bool:
+        """Return True if *ip* is a usable internal address."""
+        return bool(
+            ip
+            and ip != '0.0.0.0'
+            and not ip.startswith('127.')
+            and not ip.startswith('169.254.')
+        )
+
+    def _extract_total_ram(self, memory_modules: list) -> Optional[str]:
+        """
+        Sum all physical memory module sizes and return as a string (bytes).
+
+        SDP stores physical_memory as a string of the total byte count.
+
+        Args:
+            memory_modules: CW physicalMemory list, each with 'sizeBytes'
+
+        Returns:
+            Total bytes as string, or None if no modules
+        """
+        if not memory_modules:
+            return None
+
+        total = 0
+        for mod in memory_modules:
+            size = mod.get('sizeBytes', 0)
+            if isinstance(size, (int, float)) and size > 0:
+                total += int(size)
+
+        return str(total) if total > 0 else None
+
+    def _extract_network_adapters(self) -> list:
+        """
+        Build the SDP network_adapters array from CW networks data.
+
+        Returns a list of adapter dicts with name, ip_address, mac_address,
+        description, gateway, dhcp, and ipnet_mask.  Only adapters with a
+        valid IP or MAC are included.
+
+        Returns:
+            List of adapter dicts ready for the SDP type-specific endpoint
+        """
+        networks = self.device.get('networks')
+        if not networks:
+            return []
+
+        adapters = []
+        for net in networks:
+            ip = net.get('ipv4', '')
+            mac = net.get('macAddress', '')
+
+            # Skip adapters without a usable IP or MAC
+            if not self._is_valid_ip(ip) and not mac:
+                continue
+
+            adapter: Dict[str, Any] = {
+                'name': net.get('product') or net.get('logicalName') or 'NIC',
+            }
+            if self._is_valid_ip(ip):
+                adapter['ip_address'] = ip
+            if mac:
+                adapter['mac_address'] = mac
+
+            # Optional enrichment fields
+            desc = net.get('product') or net.get('logicalName')
+            if desc:
+                adapter['description'] = desc
+            gw = net.get('defaultIPGateway')
+            if gw and gw != '0.0.0.0':
+                adapter['gateway'] = gw
+            mask = net.get('subnetMask')
+            if mask and mask != '0.0.0.0':
+                adapter['ipnet_mask'] = mask
+            dhcp = net.get('dhcpEnabled')
+            if dhcp is not None:
+                adapter['dhcp'] = str(dhcp)
+
+            adapters.append(adapter)
+
+        return adapters
+
+    def _extract_processors(self) -> list:
+        """
+        Build the SDP processors array from CW processors data.
+
+        Returns a list of processor dicts with name, number_of_cores,
+        speed, and manufacturer.
+
+        Returns:
+            List of processor dicts ready for the SDP type-specific endpoint
+        """
+        processors = self.device.get('processors')
+        if not processors:
+            return []
+
+        result = []
+        for proc in processors:
+            name = proc.get('product')
+            if not name:
+                continue
+
+            entry: Dict[str, Any] = {'name': name}
+
+            cores = proc.get('numberOfCores')
+            if cores:
+                entry['number_of_cores'] = str(cores)
+            speed = proc.get('clockSpeedMhz')
+            if speed:
+                entry['speed'] = str(speed)
+            mfr = proc.get('manufacturer')
+            if mfr:
+                entry['manufacturer'] = mfr
+
+            result.append(entry)
+
+        return result
 
