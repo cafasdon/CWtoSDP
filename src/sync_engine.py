@@ -64,6 +64,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from .field_mapper import FieldMapper, DeviceClassifier
+from .logger import get_logger
+
+logger = get_logger("cwtosdp.sync_engine")
 
 # Default path to the main database
 # This database contains fresh data from CW and SDP APIs
