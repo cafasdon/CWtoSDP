@@ -1738,6 +1738,10 @@ class SyncGUI:
         self.progress_log = tk.Text(self.progress_win, height=15, width=70, state=tk.DISABLED)
         self.progress_log.pack(pady=10, padx=10, fill=tk.BOTH, expand=True)
 
+        # Pre-allocate bottom button frame (Close button added after sync)
+        self.progress_btn_frame = ttk.Frame(self.progress_win)
+        self.progress_btn_frame.pack(side=tk.BOTTOM, pady=10)
+
     def _run_sync_thread(self, items: List[SyncItem], is_dry_run: bool):
         """
         Run sync in background thread.
@@ -1926,9 +1930,9 @@ class SyncGUI:
             # Restore X button functionality
             self.progress_win.protocol("WM_DELETE_WINDOW", self.progress_win.destroy)
 
-            # Add close button
-            ttk.Button(self.progress_win, text="Close",
-                       command=self.progress_win.destroy).pack(pady=10)
+            # Add close button to pre-allocated frame
+            ttk.Button(self.progress_btn_frame, text="Close",
+                       command=self.progress_win.destroy).pack()
 
         # Create/update results tab
         if results:
@@ -2647,6 +2651,11 @@ class SyncGUI:
 
         ttk.Label(win, text="Database Status", font=("Segoe UI", 14, "bold")).pack(pady=10)
 
+        # Close button — pack at bottom BEFORE expandable content takes space
+        btn_frame = ttk.Frame(win)
+        btn_frame.pack(side=tk.BOTTOM, pady=10)
+        ttk.Button(btn_frame, text="Close", command=win.destroy).pack()
+
         info_frame = ttk.Frame(win, padding=20)
         info_frame.pack(fill=tk.BOTH, expand=True)
 
@@ -2687,8 +2696,6 @@ ORPHAN CHECK:
         text.insert(tk.END, info)
         text.config(state=tk.DISABLED)
         text.pack(fill=tk.BOTH, expand=True)
-
-        ttk.Button(win, text="Close", command=win.destroy).pack(pady=10)
 
     def _open_settings(self):
         """Open the settings/credentials configuration dialog."""
@@ -3007,6 +3014,11 @@ class HelpDialog:
 
     def _create_content(self):
         """Create the help content with tabs."""
+        # Close button — pack at bottom BEFORE expandable notebook
+        btn_frame = ttk.Frame(self.dialog)
+        btn_frame.pack(side=tk.BOTTOM, pady=10)
+        ttk.Button(btn_frame, text="Close", command=self.dialog.destroy).pack()
+
         notebook = ttk.Notebook(self.dialog)
         notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
@@ -3021,9 +3033,6 @@ class HelpDialog:
 
         # Tab 4: Troubleshooting
         self._create_troubleshooting_tab(notebook)
-
-        # Close button
-        ttk.Button(self.dialog, text="Close", command=self.dialog.destroy).pack(pady=10)
 
     def _create_getting_started_tab(self, notebook):
         """Create the Getting Started tab."""
