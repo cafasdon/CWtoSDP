@@ -21,6 +21,13 @@ elif [ -d ".venv" ]; then
     source .venv/bin/activate
 fi
 
+# Install dependencies if missing
+python3 -c "import requests; import dotenv" 2>/dev/null
+if [ $? -ne 0 ]; then
+    echo "Installing dependencies..."
+    pip3 install -r requirements.txt || { echo "[ERROR] Failed to install dependencies"; exit 1; }
+fi
+
 # Run the sync script with any provided arguments
 python3 run_sync.py "$@"
 

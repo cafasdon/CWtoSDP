@@ -64,6 +64,23 @@ import argparse
 import sys
 from pathlib import Path
 
+# ---------------------------------------------------------------------------
+# Dependency check — give a friendly message instead of a raw traceback
+# ---------------------------------------------------------------------------
+_REQUIRED = {"requests": "requests", "dotenv": "python-dotenv"}
+_missing = []
+for _mod, _pkg in _REQUIRED.items():
+    try:
+        __import__(_mod)
+    except ImportError:
+        _missing.append(_pkg)
+if _missing:
+    print(
+        f"\n[ERROR] Missing required packages: {', '.join(_missing)}\n"
+        f"        Run:  pip install -r requirements.txt\n"
+        f"        Or:   pip install {' '.join(_missing)}\n"
+    )
+    sys.exit(1)
 
 # Import internal modules
 from .config import load_config, AppConfig

@@ -19,6 +19,18 @@ if exist "venv\Scripts\activate.bat" (
     call .venv\Scripts\activate.bat
 )
 
+REM Install dependencies if missing
+python -c "import requests; import dotenv" >nul 2>&1
+if errorlevel 1 (
+    echo Installing dependencies...
+    pip install -r requirements.txt
+    if errorlevel 1 (
+        echo [ERROR] Failed to install dependencies
+        pause
+        exit /b 1
+    )
+)
+
 REM Run the sync script with any provided arguments
 python run_sync.py %*
 
