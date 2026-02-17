@@ -64,7 +64,6 @@ import argparse
 import sys
 from pathlib import Path
 
-import pandas as pd
 
 # Import internal modules
 from .config import load_config, AppConfig
@@ -99,7 +98,8 @@ def export_to_csv(data: list, filename: str, output_dir: Path) -> Path:
         Path('output/devices.csv')
     """
     logger = get_logger("cwtosdp.main")
-    # Use pandas to flatten nested JSON and export
+    # Use pandas to flatten nested JSON and export (lazy import — only needed for --export)
+    import pandas as pd
     df = pd.json_normalize(data)
     filepath = output_dir / filename
     df.to_csv(filepath, index=False)
