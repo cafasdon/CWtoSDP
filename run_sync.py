@@ -60,7 +60,7 @@ from src.config import load_config
 from src.logger import setup_logger, get_logger
 from src.cw_client import ConnectWiseClient
 from src.sdp_client import SDPClient
-from src.db_compare import CompareDatabase
+from src.db import Database
 from src.sync_engine import SyncEngine, SyncAction
 
 
@@ -133,26 +133,33 @@ def run_sync(
             cw_devices = cw_client.get_devices()
             logger.info(f"  ✓ Retrieved {len(cw_devices)} CW devices")
             
+            # Fetch full details for each device
+            cw_client.authenticate()
+            detailed_devices = []
+            for dev in cw_devices:
+                eid = dev.get("endpointId")
+                if eid:
+                    try:
+                        detailed_devices.append(cw_client.get_endpoint_details(eid))
+                    except Exception as e:
+                        logger.warning(f"  Could not fetch details for {eid}: {e}")
+                        detailed_devices.append(dev)
+                else:
+                    detailed_devices.append(dev)
+            
             # Store in local database
-            db = CompareDatabase()
-            # Note: Using the store method to save all devices
-            for device in cw_devices:
-                endpoint_id = device.get("endpointId")
-                if endpoint_id:
-                    db.store_cw_device_single(device, endpoint_id)
+            db = Database()
+            db.store_cw_devices(detailed_devices)
+            logger.info(f"  ✓ Stored {len(detailed_devices)} CW devices in database")
             
             # Fetch from ServiceDesk Plus
-            logger.info("Fetching ServiceDesk Plus workstations...")
+            logger.info("Fetching ServiceDesk Plus assets...")
             sdp_client = SDPClient(dry_run=True)  # Always dry_run for fetch
-            sdp_workstations = sdp_client.get_all_cmdb_workstations()
-            logger.info(f"  ✓ Retrieved {len(sdp_workstations)} SDP workstations")
+            sdp_assets = sdp_client.get_all_assets()
+            logger.info(f"  ✓ Retrieved {len(sdp_assets)} SDP assets")
             
             # Store in local database
-            for ws in sdp_workstations:
-                ws_id = str(ws.get("id", ""))
-                if ws_id:
-                    db.store_sdp_workstation_single(ws, ws_id)
-            
+            db.store_sdp_assets(sdp_assets)
             db.close()
             logger.info("  ✓ Data stored in local database")
             
@@ -233,11 +240,11 @@ def run_sync(
 
         try:
             if item.action == SyncAction.CREATE:
-                # Create new CI in SDP
+                # Create new asset in SDP
                 ci_data = item.fields_to_sync.copy()
                 ci_data["name"] = item.cw_name
 
-                result = sdp_client.create_ci(item.sdp_ci_type, ci_data)
+                result = sdp_client.create_asset(item.sdp_ci_type, ci_data)
 
                 if result:
                     if dry_run:
@@ -251,26 +258,18 @@ def run_sync(
                     results["error_details"].append(f"Create failed: {item.cw_name}")
 
             elif item.action == SyncAction.UPDATE:
-                # =============================================================
-                # UPDATE: Sync changes to existing SDP asset
-                # =============================================================
+                # Update existing SDP asset
                 if not item.sdp_id:
                     logger.warning(f"  ✗ Cannot update {item.cw_name}: Missing SDP ID")
                     results["errors"] += 1
                     results["error_details"].append(f"Update failed (no SDP ID): {item.cw_name}")
                     continue
 
-                # Prepare CI data for update
-                ci_data = {
-                    "name": item.fields_to_sync.get("name", item.cw_name),
-                }
-                # Add all CI attributes
-                for key, value in item.fields_to_sync.items():
-                    if key.startswith("ci_attributes_") and value:
-                        ci_data[key] = value
-
-                # Perform update via SDP API
-                result = sdp_client.update_ci(item.sdp_ci_type, item.sdp_id, ci_data)
+                # Pass all fields — update_asset handles nested/sub-resource routing
+                ci_data = item.fields_to_sync.copy()
+                result = sdp_client.update_asset(
+                    item.sdp_id, ci_data, asset_type_endpoint=item.sdp_ci_type
+                )
 
                 if result:
                     if dry_run:
