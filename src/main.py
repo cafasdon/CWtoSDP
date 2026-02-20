@@ -67,7 +67,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Dependency check — give a friendly message instead of a raw traceback
 # ---------------------------------------------------------------------------
-_REQUIRED = {"requests": "requests", "dotenv": "python-dotenv"}
+_REQUIRED = {"requests": "requests", "dotenv": "python-dotenv", "pandas": "pandas"}
 _missing = []
 for _mod, _pkg in _REQUIRED.items():
     try:
