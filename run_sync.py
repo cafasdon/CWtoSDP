@@ -131,7 +131,7 @@ def run_sync(
             logger.info("Fetching ConnectWise devices...")
             cw_client = ConnectWiseClient(config.connectwise)
             cw_devices = cw_client.get_devices()
-            logger.info(f"  ✓ Retrieved {len(cw_devices)} CW devices")
+            logger.info(f"  [OK] Retrieved {len(cw_devices)} CW devices")
             
             # Fetch full details for each device
             cw_client.authenticate()
@@ -150,18 +150,18 @@ def run_sync(
             # Store in local database
             db = Database()
             db.store_cw_devices(detailed_devices)
-            logger.info(f"  ✓ Stored {len(detailed_devices)} CW devices in database")
+            logger.info(f"  [OK] Stored {len(detailed_devices)} CW devices in database")
             
             # Fetch from ServiceDesk Plus
             logger.info("Fetching ServiceDesk Plus assets...")
             sdp_client = SDPClient(dry_run=True)  # Always dry_run for fetch
             sdp_assets = sdp_client.get_all_assets()
-            logger.info(f"  ✓ Retrieved {len(sdp_assets)} SDP assets")
+            logger.info(f"  [OK] Retrieved {len(sdp_assets)} SDP assets")
             
             # Store in local database
             db.store_sdp_assets(sdp_assets)
             db.close()
-            logger.info("  ✓ Data stored in local database")
+            logger.info("  [OK] Data stored in local database")
             
         except Exception as e:
             logger.error(f"Failed to fetch data: {e}")
@@ -214,7 +214,7 @@ def run_sync(
     if not dry_run and not auto_confirm:
         logger.info("")
         logger.info("=" * 70)
-        logger.warning("⚠️  ABOUT TO PERFORM LIVE SYNC")
+        logger.warning("[WARNING] ABOUT TO PERFORM LIVE SYNC")
         logger.warning(f"    This will CREATE {create_count} and UPDATE {update_count} records in SDP")
         logger.info("=" * 70)
 
@@ -250,17 +250,17 @@ def run_sync(
                     if dry_run:
                         logger.info(f"  [DRY RUN] Would create: {item.cw_name} ({item.sdp_ci_type})")
                     else:
-                        logger.info(f"  ✓ Created: {item.cw_name} ({item.sdp_ci_type})")
+                        logger.info(f"  [OK] Created: {item.cw_name} ({item.sdp_ci_type})")
                     results["created"] += 1
                 else:
-                    logger.warning(f"  ✗ Failed to create: {item.cw_name}")
+                    logger.warning(f"  [FAIL] Failed to create: {item.cw_name}")
                     results["errors"] += 1
                     results["error_details"].append(f"Create failed: {item.cw_name}")
 
             elif item.action == SyncAction.UPDATE:
                 # Update existing SDP asset
                 if not item.sdp_id:
-                    logger.warning(f"  ✗ Cannot update {item.cw_name}: Missing SDP ID")
+                    logger.warning(f"  [FAIL] Cannot update {item.cw_name}: Missing SDP ID")
                     results["errors"] += 1
                     results["error_details"].append(f"Update failed (no SDP ID): {item.cw_name}")
                     continue
@@ -275,10 +275,10 @@ def run_sync(
                     if dry_run:
                         logger.info(f"  [DRY RUN] Would update: {item.cw_name} (SDP ID: {item.sdp_id})")
                     else:
-                        logger.info(f"  🔄 Updated: {item.cw_name} (SDP ID: {item.sdp_id})")
+                        logger.info(f"  [SYNC] Updated: {item.cw_name} (SDP ID: {item.sdp_id})")
                     results["updated"] += 1
                 else:
-                    logger.warning(f"  ✗ Failed to update: {item.cw_name}")
+                    logger.warning(f"  [FAIL] Failed to update: {item.cw_name}")
                     results["errors"] += 1
                     results["error_details"].append(f"Update failed: {item.cw_name}")
 
@@ -288,7 +288,7 @@ def run_sync(
                 results["skipped"] += 1
 
         except Exception as e:
-            logger.error(f"  ✗ Error processing {item.cw_name}: {e}")
+            logger.error(f"  [FAIL] Error processing {item.cw_name}: {e}")
             results["errors"] += 1
             results["error_details"].append(f"{item.cw_name}: {str(e)}")
 

@@ -31,8 +31,9 @@ if errorlevel 1 (
     )
 )
 
-REM Run the sync script with any provided arguments
-python run_sync.py %*
+REM Run the sync script with auto-confirm (--yes) by default
+REM Pass additional flags after run_sync.bat to override (e.g. --dry-run)
+python run_sync.py --yes %*
 
 REM Keep window open if there was an error
 if %ERRORLEVEL% neq 0 (
