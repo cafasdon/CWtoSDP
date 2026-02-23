@@ -42,6 +42,7 @@ Version: 1.0.0
 
 import argparse
 import json
+import os
 import sys
 import time
 from datetime import datetime
@@ -374,12 +375,20 @@ Examples:
 
     args = parser.parse_args()
 
+    # Determine if we should auto-confirm based on flag, env var, or non-interactive shell
+    # This prevents blocking prompts during automated scheduled tasks
+    is_auto_confirm = (
+        args.yes or 
+        os.environ.get("CW_AUTO_CONFIRM") in ("1", "true", "True") or
+        not sys.stdin.isatty()
+    )
+
     # Run the sync
     results = run_sync(
         dry_run=args.dry_run,
         create_only=args.create_only,
         skip_fetch=args.preview_only,
-        auto_confirm=args.yes
+        auto_confirm=is_auto_confirm
     )
 
     # Exit with appropriate code

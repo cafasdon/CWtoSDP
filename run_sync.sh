@@ -28,8 +28,8 @@ if [ $? -ne 0 ]; then
     pip3 install -r requirements.txt || { echo "[ERROR] Failed to install dependencies"; exit 1; }
 fi
 
-# Run the sync script with any provided arguments
-python3 run_sync.py "$@"
+# Run the sync script with auto-confirm (--yes) by default
+python3 run_sync.py --yes "$@"
 
 # Exit with the Python script's exit code
 exit $?
