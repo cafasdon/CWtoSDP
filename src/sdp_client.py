@@ -557,6 +557,27 @@ class ServiceDeskPlusClient:
     # =========================================================================
 
 
+    @staticmethod
+    def _singularize_endpoint(plural: str) -> str:
+        """
+        Convert an SDP asset type plural endpoint to its singular wrapper key.
+
+        SDP API POST payloads must wrap data in the singular form, e.g.:
+          asset_switches  -> asset_switch
+          asset_routers   -> asset_router
+          asset_servers   -> asset_server
+
+        WARNING: Do NOT use rstrip('s') — it strips ALL trailing 's' chars,
+        producing 'asset_switche' instead of 'asset_switch'.
+        """
+        # Handle -ches, -shes, -xes plurals (e.g. switches -> switch)
+        if plural.endswith(('ches', 'shes', 'xes')):
+            return plural[:-2]  # strip 'es'
+        # Standard -s plural (e.g. routers -> router)
+        if plural.endswith('s'):
+            return plural[:-1]  # strip 's'
+        return plural
+
     # Fields known to be rejected by specific asset types.
     # If a field is listed here for an asset type, it will be stripped pre-send.
     # NOTE: ip_address and mac_address are NOT listed here — they are extracted
@@ -800,7 +821,7 @@ class ServiceDeskPlusClient:
             logger.debug(f"Using {len(asset_data['network_adapters'])} network_adapters from field mapper")
 
         # Wrap in the singular form key (e.g. asset_virtual_machine for asset_virtual_machines)
-        singular_key = asset_type_endpoint.rstrip('s')
+        singular_key = self._singularize_endpoint(asset_type_endpoint)
         payload = {singular_key: asset_data}
 
         endpoint = f"/{asset_type_endpoint}"
@@ -948,7 +969,7 @@ class ServiceDeskPlusClient:
 
         has_type_data = adapters or processors or nested_fields
         if has_type_data and asset_type_endpoint:
-            singular_key = asset_type_endpoint.rstrip('s')
+            singular_key = self._singularize_endpoint(asset_type_endpoint)
             sub_payload: Dict[str, Any] = {}
             if adapters:
                 sub_payload["network_adapters"] = adapters

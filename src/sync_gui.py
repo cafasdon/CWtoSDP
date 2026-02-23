@@ -1795,7 +1795,10 @@ class SyncGUI:
                             result_entry["status"] = "created"
                             result_entry["message"] = "Created successfully"
                             # Track for revert
-                            sdp_id = result.get("asset", result.get(item.sdp_ci_type.rstrip('s'), {})).get("id")
+                            # Derive singular wrapper key (asset_switches -> asset_switch)
+                            ci = item.sdp_ci_type
+                            singular = ci[:-2] if ci.endswith(('ches', 'shes', 'xes')) else ci[:-1] if ci.endswith('s') else ci
+                            sdp_id = result.get("asset", result.get(singular, {})).get("id")
                             if sdp_id:
                                 result_entry["sdp_id"] = sdp_id
                                 created_ids.append({
