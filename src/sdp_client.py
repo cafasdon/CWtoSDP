@@ -561,7 +561,29 @@ class ServiceDeskPlusClient:
     # If a field is listed here for an asset type, it will be stripped pre-send.
     # NOTE: ip_address and mac_address are NOT listed here — they are extracted
     # and converted to network_adapters before the payload reaches the endpoint.
-    _UNSUPPORTED_FIELDS: Dict[str, set] = {}
+    _UNSUPPORTED_FIELDS: Dict[str, set] = {
+        # Non-computer asset types inherit from 'assets' (base), NOT 'asset_computers'.
+        # They do NOT support computer-specific nested objects or sub-resource arrays.
+        # Discovered from SDP product_type.inherits field:
+        #   - Switch, Firewalls, Router, Access Point -> inherits 'assets' (base)
+        #   - Workstation, Virtual Machine, Server     -> inherits 'asset_computers'
+        "asset_switches": {
+            "operating_system", "computer_system", "memory",
+            "processors", "network_adapters",
+        },
+        "custom_asset_firewalls": {
+            "operating_system", "computer_system", "memory",
+            "processors", "network_adapters",
+        },
+        "asset_routers": {
+            "operating_system", "computer_system", "memory",
+            "processors", "network_adapters",
+        },
+        "asset_access_points": {
+            "operating_system", "computer_system", "memory",
+            "processors", "network_adapters",
+        },
+    }
 
     # Valid IPv4 regex: four octets 0-255 separated by dots
     _IPV4_REGEX = re.compile(
