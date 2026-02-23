@@ -210,21 +210,13 @@ def run_sync(
     logger.info(f"  Will UPDATE: {update_count}")
 
     # -------------------------------------------------------------------------
-    # STEP 3: Confirm before proceeding (unless auto-confirm)
+    # STEP 3: Log sync plan (no interactive prompt — use --dry-run for safety)
     # -------------------------------------------------------------------------
-    if not dry_run and not auto_confirm:
+    if not dry_run:
         logger.info("")
         logger.info("=" * 70)
-        logger.warning("[WARNING] ABOUT TO PERFORM LIVE SYNC")
-        logger.warning(f"    This will CREATE {create_count} and UPDATE {update_count} records in SDP")
+        logger.info("LIVE SYNC: Creating %d and updating %d records in SDP", create_count, update_count)
         logger.info("=" * 70)
-
-        response = input("\nType 'yes' to proceed, anything else to abort: ").strip().lower()
-        if response != 'yes':
-            logger.info("Sync aborted by user")
-            results["success"] = False
-            results["error"] = "Aborted by user"
-            return results
 
     # -------------------------------------------------------------------------
     # STEP 4: Execute sync
